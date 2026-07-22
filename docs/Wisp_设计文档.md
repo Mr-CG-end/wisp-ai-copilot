@@ -5,6 +5,10 @@
 | 文档信息 | 内容 |
 |---|---|
 | 状态 | 草案，等待阶段一技术验证回填实测数据 |
+| 版本 | v0.2（对应 PRD v0.3） |
+| 作者 | Mr-CG-end |
+| 创建日期 | 2026-07-21 |
+| 更新日期 | 2026-07-22 |
 | 范围 | **全产品架构总览 + v0.1(P0) 可落地详设**；v0.2 / v1.0 仅方向性设计并标注"待验证" |
 | 上游 | PRD v0.3（`Wisp_需求文档.md`） |
 | 约束继承 | 零业务后端、零 API Key、本地推理、用户确认后才写入、最小权限、无远程代码 |
@@ -271,9 +275,11 @@ Worker 用 `Comlink.expose()` 暴露 RPC；Side Panel 用 `Comlink.wrap()` 调�
 interface LoadProgress { file: string; loaded: number; total: number; }
 
 interface InitConfig {
-  modelId: string; revision: string;
+  modelId: string;
+  revision: string;                          // 必须是「下载前」锁定的确切 commit sha，避免改 sha 变缓存键重下
   quant: { webgpu: 'q4f16'; wasm: 'q8' };   // 分后端量化；wasm 具体格式待实测 🔬
   backend?: 'webgpu' | 'wasm';               // 缺省先试 webgpu
+  ortBaseUrl: string;                        // ORT 本地资产基址，由 Side Panel 经 chrome.runtime.getURL 传入；Worker 不碰 chrome.*
 }
 interface InitResult { backend: 'webgpu' | 'wasm'; ready: boolean; selfCheckMs: number; }
 
@@ -288,12 +294,13 @@ interface GenStats { ttftMs: number; tokens: number; tokensPerSec: number;
                      backend: 'webgpu' | 'wasm'; truncated: boolean; }
 
 interface InferenceApi {
-  // 回应评审 #5：init 支持下载取消（AbortSignal）——可行性见下 🔬
-  init(cfg: InitConfig, onProgress: (p: LoadProgress) => void,
-       signal?: AbortSignal): Promise<InitResult>;
+  // 契约修正（实现评审）：AbortSignal 跨 Comlink 无法把 abort 同步进 Worker fetch；
+  // 下载取消改由 Panel「终止并重建 Worker」可靠中止（见下），故 init 不再收 signal。
+  init(cfg: InitConfig, onProgress: (p: LoadProgress) => void): Promise<InitResult>;
   generate(req: GenerateRequest, signalId: Uuid,
            onToken: (delta: string) => void): Promise<GenStats>;
   cancel(signalId: Uuid): void;              // 回应评审 #4：真正中断生成
+  dispose(): Promise<void>;                  // 释放模型/GPU session；切后端/失败/终止前调用
   getStatus(): Promise<{ loaded: boolean; backend?: 'webgpu' | 'wasm' }>;
   // v0.2 预留：embed(texts) / ocr(image)
 }
@@ -316,7 +323,7 @@ async function generate(req, signalId, onToken) {
 function cancel(signalId) { stoppers.get(signalId)?.interrupt(); }  // 500ms 停字 / 1s 结束
 ```
 
-**下载取消（回应评审 #5）**：契约暴露 `AbortSignal`；但 **transformers.js 能否真正中断在途权重下载取决于其对 fetch abort 的透传，待实测** 🔬。退化方案：取消即在应用层忽略结果并清理半成品缓存，不进入可用状态。
+**下载取消（回应评审 #5，契约修正）**：不依赖跨 Comlink 的 `AbortSignal`。可靠中止手段是 **Side Panel 终止并重建 Worker**（`terminate()` 直接杀死在途下载/加载线程）+ 显式清理该模型的 Cache 条目，使被取消的半成品不会伪装成"已完成"。**transformers.js 是否支持原生 fetch 中止（signal 透传）仅作可行性调查并如实记录，不作为交付手段** 🔬。同理，模型资源在切后端/初始化失败/取消/终止前统一经 `dispose()` 释放，避免 GPU session/显存泄漏。
 
 **Prompt：用 Qwen3 chat template + 关闭 thinking（回应评审 #6、#7）**：不再手拼 XML；用 `apply_chat_template`，不可信正文经转义放入 user 消息：
 
@@ -435,15 +442,16 @@ sequenceDiagram
     SP->>SP: 检测浏览器版本/WebGPU/存储空间
     SP->>U: 展示模型名/体积/来源/「开始下载」
     U->>SP: 确认下载
-    SP->>W: init(cfg, onProgress, signal)
+    SP->>W: init(cfg, onProgress)
     W->>C: 检查缓存 (modelId@rev@quant)
     alt 缓存命中且版本匹配
         C-->>W: 命中 → 直接本地加载
     else 未命中
         W->>W: 下载权重(流式进度)
         opt 用户取消
-            U->>SP: 取消 → signal.abort()
-            SP-->>U: 清理半成品缓存, 回初始化 (可行性🔬)
+            U->>SP: 取消
+            SP->>W: 终止并重建 Worker (可靠中止在途下载)
+            SP-->>U: 清理该模型 Cache 条目, 回初始化
         end
         W->>C: 写入缓存
     end
@@ -536,7 +544,7 @@ type ErrorCode =
 | WebGPU 不可用 | init 失败 | `WEBGPU_UNAVAILABLE` | 提供 WASM 兼容模式 + 速度提示 |
 | 推理中崩溃 | generate 异常 | `WEBGPU_CRASH` | 释放任务、保留问题、允许重试/切兼容 |
 | 首次下载失败 | init 下载 | `DOWNLOAD_FAILED` | 显示失败文件/原因/重试 |
-| 下载被取消 | signal.abort | `DOWNLOAD_CANCELLED` | 清理半成品缓存、回初始化 |
+| 下载被取消 | 用户取消→终止并重建 Worker | `DOWNLOAD_CANCELLED` | 清理半成品缓存、回初始化 |
 | 缓存缺失或损坏 | 校验失败 | `CACHE_CORRUPT` | 清理对应版本缓存并重新初始化 |
 | 离线且未缓存 | 无网+无缓存 | `OFFLINE_NO_MODEL` | 说明需联网完成首次下载 |
 | 存储不足 | estimate 预检 | `STORAGE_FULL` | 展示用量 + 清理入口 |
@@ -649,7 +657,7 @@ type ErrorCode =
 - [ ] WebGPU 对 `q4f16` 的支持与 Qwen3-0.6B 实际 TTFT/tokens/s；WASM 量化格式（暂定 `q8`）实测。
 - [ ] ORT-Web 多线程/SIMD 与 **MV3 扩展页跨源隔离（SAB / COOP·COEP 可配性）** 是否可用及对 tokens/s 的影响。
 - [ ] `sidePanel.open()` 用户手势能否跨 CS→SW 消息往返保持有效。
-- [ ] **transformers.js 是否支持中断在途权重下载（AbortSignal 透传）**；否则用"取消即弃 + 清缓存"退化。
+- [ ] **transformers.js 是否支持中断在途权重下载（fetch signal 透传）**；否则以「终止并重建 Worker + 清该模型 Cache 条目」作可靠中止手段。
 - [ ] Worker 在 Side Panel 关闭后是否做保活优化（默认释放）。
 - [ ] ONNX Runtime `.wasm` 在 WXT/Vite 下作为本地资产打包的产物核对。
 - [ ] `@mozilla/readability` 在固定 10 篇文章页 + 5 个 SPA 上的提取成功率（≥ 80%）与一次性提取耗时上限。
