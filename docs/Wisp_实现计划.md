@@ -4,8 +4,8 @@
 
 | 文档信息 | 内容 |
 |---|---|
-| 状态 | 执行中：Task 1–8 已完成，下一步 Task 9 |
-| 版本 | v0.1.8 |
+| 状态 | 执行中：Task 1–9 已完成，下一步 Task 10 |
+| 版本 | v0.1.9 |
 | 范围 | 阶段一技术验证 Spike（对应 PRD §13 阶段门 / 设计文档 §10 验证清单） |
 | 上游 | 设计文档 v0.2（`Wisp_设计文档.md`）· PRD v0.3（`Wisp_需求文档.md`） |
 | 作者 | Mr-CG-end |
@@ -32,6 +32,8 @@
 
 > **v0.1.8 进度同步**：Task 8 真机验收通过。连续 5 次生成取消均达到停字 ≤ 500ms、任务结束 ≤ 1s；取消缓存加载后既有 q4f16 权重仍保留；取消后立即重试未受旧 attempt 回调污染；主动取消状态可正常恢复并再次加载。
 
+> **v0.1.9 进度同步**：Task 9 已完成代码实现与本地打包验证。在 `wxt.config.ts` 的 manifest 中显式配置 `cross_origin_embedder_policy` (`require-corp`) 与 `cross_origin_opener_policy` (`same-origin`)；在 Worker 侧探测 `self.crossOriginIsolated`，未开启跨源隔离时动态调整 ORT `numThreads` 为 1 (单线程退化)；Worker 与 UI 可展示跨源隔离与线程配置。打包产物成功输出本地 ORT `.mjs/.wasm` 静态资产，6 个测试文件共 30 项单测全部通过，开发与生产构建均成功。
+
 ---
 
 ## 0. 当前进度与后续执行计划
@@ -48,7 +50,8 @@
 | Task 6：真实模型加载 | 已完成 | WebGPU q4f16 到 `ready`；一步生成自检 2520ms；revision、下载主机、ORT 本地资源均已验证 |
 | Task 7：真实流式生成 | 已完成 | 真实流式生成、精确 token 计数、Worker/感知双 TTFT、流式 ThinkFilter 已集成与提交 |
 | Task 8：取消与可行性验证 | 已完成 | 5 次生成取消达到停字/结束阈值；下载取消保留既有完整缓存；旧 attempt 隔离与取消后重试真机通过 |
-| Task 9–10：WASM 与阶段门 | 未开始 | 阶段门尚未通过，不进入 v0.1 UI 全面开发 |
+| Task 9：ORT WASM 隔离探测与 WASM 后端 | 已完成 | manifest 配置 COOP/COEP；Worker 探测 crossOriginIsolated 与 numThreads；本地 ORT 资产打包与单测成功 |
+| Task 10：阶段门实测 | 未开始 | 阶段门实测数据准备回填，不进入 v0.1 UI 全面开发 |
 
 ### 0.2 后续执行顺序
 

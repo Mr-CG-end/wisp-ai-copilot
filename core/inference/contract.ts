@@ -37,5 +37,10 @@ export interface InferenceApi {
   generate(req: GenerateRequest, signalId: Uuid, onToken: (delta: string) => void): Promise<GenStats>;
   cancel(signalId: Uuid): void;
   dispose(): Promise<void>;
-  getStatus(): Promise<{ loaded: boolean; backend?: 'webgpu' | 'wasm' }>;
+  getStatus(): Promise<{
+    loaded: boolean;
+    backend?: 'webgpu' | 'wasm';
+    crossOriginIsolated?: boolean;
+    numThreads?: number;
+  }>;
 }

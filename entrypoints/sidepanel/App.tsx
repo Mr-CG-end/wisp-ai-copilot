@@ -54,6 +54,7 @@ export function App() {
   const [initNotice, setInitNotice] = useState<string | null>(null);
   const [isCancellingInit, setIsCancellingInit] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [workerStatus, setWorkerStatus] = useState<{ crossOriginIsolated?: boolean; numThreads?: number } | null>(null);
   const [generationNotice, setGenerationNotice] = useState<string | null>(null);
   const [cancelMetrics, setCancelMetrics] = useState<CancelMetrics | null>(null);
   const currentSignalIdRef = useRef<string | null>(null);
@@ -117,6 +118,10 @@ export function App() {
       );
       if (attempt !== initAttemptRef.current) return;
       setInitResult(res);
+      const status = await api.getStatus();
+      if (attempt === initAttemptRef.current) {
+        setWorkerStatus({ crossOriginIsolated: status.crossOriginIsolated, numThreads: status.numThreads });
+      }
       dispatch({ t: 'init-ok' });
       dispatch({ t: 'self-check-ok' });
     } catch (err) {
@@ -238,7 +243,7 @@ export function App() {
 
   return (
     <main style={{ padding: 16, fontFamily: 'system-ui' }}>
-      <h2>Wisp Spike (Task 8)</h2>
+      <h2>Wisp Spike (Task 9)</h2>
       {WORKER_UNAVAILABLE && (
         <div style={{ color: '#8a4b08', marginBottom: 12 }}>
           WXT 实时开发模式不支持扩展 Worker。请运行 npm run build:dev 后重新加载扩展。
@@ -287,6 +292,12 @@ export function App() {
       {isReady && initResult && (
         <div style={{ background: '#e6f7ff', padding: 8, borderRadius: 4, marginBottom: 12, fontSize: 13 }}>
           已就绪 | 后端: {initResult.backend} | 自检耗时: {Math.round(initResult.selfCheckMs)}ms
+          {workerStatus && (
+            <span>
+              {' '}
+              | 跨源隔离: {workerStatus.crossOriginIsolated ? '已开启 (SAB/多线程)' : '未开启 (单线程)'}
+            </span>
+          )}
         </div>
       )}
 

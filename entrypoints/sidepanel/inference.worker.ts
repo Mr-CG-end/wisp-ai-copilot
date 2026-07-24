@@ -26,10 +26,22 @@ import { StopperRegistry } from '../../core/inference/cancellation';
 
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
+
+const isIsolated = typeof self !== 'undefined' && Boolean(self.crossOriginIsolated);
 env.backends.onnx.wasm!.wasmPaths = {
   mjs: ortWasmModuleUrl,
   wasm: ortWasmBinaryUrl,
 };
+env.backends.onnx.wasm!.numThreads = isIsolated ? undefined : 1;
+
+console.log(
+  '[wisp] crossOriginIsolated=',
+  isIsolated,
+  'SAB=',
+  typeof SharedArrayBuffer !== 'undefined',
+  'numThreads=',
+  env.backends.onnx.wasm!.numThreads ?? 'auto'
+);
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 globalThis.fetch = async (input, init) => {
@@ -171,7 +183,12 @@ const api: Partial<InferenceApi> = {
   init,
   dispose: disposeLoaded,
   async getStatus() {
-    return { loaded: !!model, backend: currentBackend ?? undefined };
+    return {
+      loaded: !!model,
+      backend: currentBackend ?? undefined,
+      crossOriginIsolated: typeof self !== 'undefined' ? Boolean(self.crossOriginIsolated) : false,
+      numThreads: env.backends.onnx.wasm!.numThreads,
+    };
   },
   generate,
   cancel,
