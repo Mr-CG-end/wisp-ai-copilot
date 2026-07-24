@@ -1,4 +1,4 @@
-import { useReducer, useState } from 'react';
+import { useReducer, useRef, useState } from 'react';
 import * as Comlink from 'comlink';
 import { useInference } from './useInference';
 import type { GenerateRequest, GenStats, Lang, LoadProgress, InitResult } from '../../core/inference/contract';
@@ -24,6 +24,34 @@ export function App() {
   const [progressPct, setProgressPct] = useState<number>(0);
   const [stats, setStats] = useState<GenStats | null>(null);
   const [perceivedTtft, setPerceivedTtft] = useState<number | null>(null);
+  const currentSignalIdRef = useRef<string | null>(null);
+
+  // 🔬 调查结论：@huggingface/transformers 暂未暴露原生 AbortSignal 传递钩子。
+  // 因此采用 Panel 侧终止并重建 Worker + 显式清理 Cache API 条目作为 100% 可靠的下载取消手段。
+  const clearModelCache = async (modelId: string, _revision: string) => {
+    try {
+      if (typeof caches === 'undefined') return;
+      const cacheNames = await caches.keys();
+      for (const name of cacheNames) {
+        if (name.includes('transformers') || name.includes('huggingface')) {
+          const cache = await caches.open(name);
+          const keys = await cache.keys();
+          await Promise.all(
+            keys.filter((r) => r.url.includes(modelId)).map((r) => cache.delete(r))
+          );
+        }
+      }
+    } catch (e) {
+      console.warn('clearModelCache failed:', e);
+    }
+  };
+
+  const handleCancelDownload = async () => {
+    recreate();
+    await clearModelCache(MODEL_ID, REVISION);
+    dispatch({ t: 'init-fail', reason: 'DOWNLOAD_CANCELLED' });
+    setProgressPct(0);
+  };
 
   const runInit = async (backend: 'webgpu' | 'wasm') => {
     setProgressPct(0);
@@ -72,11 +100,25 @@ export function App() {
     setPerceivedTtft(null);
   };
 
+  const handleCancelGeneration = async () => {
+    if (currentSignalIdRef.current) {
+      try {
+        const api = await getApi();
+        await api.cancel(currentSignalIdRef.current);
+      } catch (err) {
+        console.error('Cancel generation failed:', err);
+      }
+    }
+  };
+
   const handleGenerate = async () => {
     setOutput('');
     setStats(null);
     setPerceivedTtft(null);
     setIsGenerating(true);
+
+    const signalId = crypto.randomUUID();
+    currentSignalIdRef.current = signalId;
 
     const clickAt = performance.now();
     let firstTokenReceived = false;
@@ -91,7 +133,7 @@ export function App() {
           targetLang: taskType === 'translate' ? targetLang : undefined,
           params: { maxNewTokens: 256, temperature: 0 },
         },
-        crypto.randomUUID(),
+        signalId,
         Comlink.proxy((delta: string) => {
           setOutput((prev) => prev + delta);
           if (!firstTokenReceived) {
@@ -108,6 +150,7 @@ export function App() {
     } catch (err) {
       console.error('Generation failed:', err);
     } finally {
+      currentSignalIdRef.current = null;
       setIsGenerating(false);
     }
   };
@@ -117,7 +160,7 @@ export function App() {
 
   return (
     <main style={{ padding: 16, fontFamily: 'system-ui' }}>
-      <h2>Wisp Spike (Task 7)</h2>
+      <h2>Wisp Spike (Task 8)</h2>
       {WORKER_UNAVAILABLE && (
         <div style={{ color: '#8a4b08', marginBottom: 12 }}>
           WXT 实时开发模式不支持扩展 Worker。请运行 npm run build:dev 后重新加载扩展。
@@ -127,6 +170,11 @@ export function App() {
         <button onClick={handleAutoInit} disabled={WORKER_UNAVAILABLE || isInitializing || isGenerating}>
           {isInitializing ? `模型加载中 (${progressPct}%)...` : '加载 Qwen3-0.6B (WebGPU)'}
         </button>
+        {isInitializing && (
+          <button onClick={handleCancelDownload} style={{ marginLeft: 8, color: '#d32f2f' }}>
+            取消下载
+          </button>
+        )}
         <button
           onClick={handleRecreate}
           style={{ marginLeft: 8 }}
@@ -210,6 +258,11 @@ export function App() {
         <button onClick={handleGenerate} disabled={!isReady || isGenerating || isInitializing}>
           {isGenerating ? '流式生成中...' : '流式生成'}
         </button>
+        {isGenerating && (
+          <button onClick={handleCancelGeneration} style={{ marginLeft: 8, color: '#d32f2f' }}>
+            停止生成
+          </button>
+        )}
       </div>
 
       <div style={{ marginTop: 12 }}>

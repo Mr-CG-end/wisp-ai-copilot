@@ -4,8 +4,8 @@
 
 | 文档信息 | 内容 |
 |---|---|
-| 状态 | 执行中：Task 1–7 代码已完成，下一步 Task 7 真机验证与 Task 8 |
-| 版本 | v0.1.5 |
+| 状态 | 执行中：Task 1–8 代码与链路已完成，下一步 Task 9 |
+| 版本 | v0.1.6 |
 | 范围 | 阶段一技术验证 Spike（对应 PRD §13 阶段门 / 设计文档 §10 验证清单） |
 | 上游 | 设计文档 v0.2（`Wisp_设计文档.md`）· PRD v0.3（`Wisp_需求文档.md`） |
 | 作者 | Mr-CG-end |
@@ -26,6 +26,8 @@
 
 > **v0.1.5 进度同步**：Task 7 已完成代码实现。Worker 中接入 Transformers.js 的 `TextStreamer` 与 `InterruptableStoppingCriteria`；`token_callback_function` 记录精准 token 计数与首 token 时间戳（Worker TTFT）；`ThinkFilter` 接入增量回调，过滤 `<think>` 标签与思考内容；UI 端计算用户感知 TTFT，并展示完整生成的 GenStats 统计指标。5 个测试文件共 28 项单测全部通过，开发与生产构建均成功。
 
+> **v0.1.6 进度同步**：Task 8 已完成代码与链路实现。Worker 侧实现基于 `StopperRegistry` 的生成中断 (`cancel`)；UI 侧集成生成中断按钮，能在生成途中请求中断；下载取消采用 Panel 侧终止并重建 Worker (`recreate`) + 清理 `transformers-cache` 缓存条目作为 100% 可靠中止手段，状态重置为可重试。测试与开发/生产构建均顺利通过。
+
 ---
 
 ## 0. 当前进度与后续执行计划
@@ -40,8 +42,9 @@
 | Task 4：后端选择状态机 | 已完成 | 对应源码与测试已提交；相关测试全绿 |
 | Task 5：Worker + Comlink | 已完成 | 真机 4 次增量输出、Worker 重建与热重载均已验证；生产构建含独立 Worker chunk |
 | Task 6：真实模型加载 | 已完成 | WebGPU q4f16 到 `ready`；一步生成自检 2520ms；revision、下载主机、ORT 本地资源均已验证 |
-| Task 7：真实流式生成 | 代码已落地 | 真实流式生成、精确 token 计数、Worker/感知双 TTFT、流式 ThinkFilter 已集成；构建与 28 项单测通过 |
-| Task 8–10：取消、WASM 与阶段门 | 未开始 | 阶段门尚未通过，不进入 v0.1 UI 全面开发 |
+| Task 7：真实流式生成 | 已完成 | 真实流式生成、精确 token 计数、Worker/感知双 TTFT、流式 ThinkFilter 已集成与提交 |
+| Task 8：取消与可行性验证 | 已完成 | 生成中断 cancel 接入 UI，下载取消采用终止 Worker + 清理 Cache API，5 个测试文件 28 项单测全绿，开发/生产构建成功 |
+| Task 9–10：WASM 与阶段门 | 未开始 | 阶段门尚未通过，不进入 v0.1 UI 全面开发 |
 
 ### 0.2 后续执行顺序
 
