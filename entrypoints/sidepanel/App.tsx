@@ -3,13 +3,40 @@ import * as Comlink from 'comlink';
 import { useInference } from './useInference';
 import type { GenerateRequest, GenStats, Lang, LoadProgress, InitResult } from '../../core/inference/contract';
 import { reduce } from '../../core/inference/backend';
+import { selectNewModelCacheUrls } from '../../core/inference/cacheSelection';
 
 const MODEL_ID = 'onnx-community/Qwen3-0.6B-ONNX';
 const REVISION = 'da1453100cf3ff33ef56d17983fc7a8648706db6';
 const WORKER_UNAVAILABLE = import.meta.env.COMMAND === 'serve';
+const TRANSFORMERS_CACHE = 'transformers-cache';
 
 const DEFAULT_TEXT =
   '人工智能正在改变我们生活与工作的方方面面。特别是在前端与边缘计算领域，WebGPU 和 WASM 技术使得在浏览器本地运行小参数语言模型成为可能。';
+
+type CancelMetrics = {
+  stopTextMs: number;
+  endMs: number;
+};
+
+async function snapshotModelCache(): Promise<Set<string> | null> {
+  if (typeof caches === 'undefined') return null;
+  const cacheNames = await caches.keys();
+  if (!cacheNames.includes(TRANSFORMERS_CACHE)) return new Set();
+  const cache = await caches.open(TRANSFORMERS_CACHE);
+  return new Set((await cache.keys()).map((request) => request.url));
+}
+
+async function clearNewModelCacheEntries(existingUrls: ReadonlySet<string> | null): Promise<number> {
+  if (typeof caches === 'undefined' || existingUrls === null) return 0;
+  const cacheNames = await caches.keys();
+  if (!cacheNames.includes(TRANSFORMERS_CACHE)) return 0;
+
+  const cache = await caches.open(TRANSFORMERS_CACHE);
+  const urls = (await cache.keys()).map((request) => request.url);
+  const addedUrls = selectNewModelCacheUrls(urls, existingUrls, MODEL_ID, REVISION);
+  await Promise.all(addedUrls.map((url) => cache.delete(url)));
+  return addedUrls.length;
+}
 
 export function App() {
   const { getApi, recreate } = useInference();
@@ -24,38 +51,56 @@ export function App() {
   const [progressPct, setProgressPct] = useState<number>(0);
   const [stats, setStats] = useState<GenStats | null>(null);
   const [perceivedTtft, setPerceivedTtft] = useState<number | null>(null);
+  const [initNotice, setInitNotice] = useState<string | null>(null);
+  const [isCancellingInit, setIsCancellingInit] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const [generationNotice, setGenerationNotice] = useState<string | null>(null);
+  const [cancelMetrics, setCancelMetrics] = useState<CancelMetrics | null>(null);
   const currentSignalIdRef = useRef<string | null>(null);
+  const initAttemptRef = useRef(0);
+  const initCacheBaselineRef = useRef<Set<string> | null>(null);
+  const cancelRequestedAtRef = useRef<number | null>(null);
+  const lastTokenAtRef = useRef<number | null>(null);
 
   // 🔬 调查结论：@huggingface/transformers 暂未暴露原生 AbortSignal 传递钩子。
-  // 因此采用 Panel 侧终止并重建 Worker + 显式清理 Cache API 条目作为 100% 可靠的下载取消手段。
-  const clearModelCache = async (modelId: string, _revision: string) => {
+  // 因此采用 Panel 侧终止并重建 Worker，并且只清理本次初始化新增的缓存条目。
+  const handleCancelDownload = async () => {
+    if (isCancellingInit) return;
+    setIsCancellingInit(true);
+    const baseline = initCacheBaselineRef.current;
+    initAttemptRef.current += 1;
+    recreate();
+    dispatch({ t: 'reset' });
+    setInitResult(null);
+    setProgressPct(0);
+
     try {
-      if (typeof caches === 'undefined') return;
-      const cacheNames = await caches.keys();
-      for (const name of cacheNames) {
-        if (name.includes('transformers') || name.includes('huggingface')) {
-          const cache = await caches.open(name);
-          const keys = await cache.keys();
-          await Promise.all(
-            keys.filter((r) => r.url.includes(modelId)).map((r) => cache.delete(r))
-          );
-        }
-      }
-    } catch (e) {
-      console.warn('clearModelCache failed:', e);
+      const removed = await clearNewModelCacheEntries(baseline);
+      setInitNotice(removed > 0 ? `加载已取消，已清理本次新增的 ${removed} 个缓存条目` : '加载已取消，可重新加载');
+    } catch (err) {
+      console.warn('clearNewModelCacheEntries failed:', err);
+      setInitNotice('加载已终止，但缓存清理失败；既有完整模型缓存未主动删除');
+    } finally {
+      initCacheBaselineRef.current = null;
+      setIsCancellingInit(false);
     }
   };
 
-  const handleCancelDownload = async () => {
-    recreate();
-    await clearModelCache(MODEL_ID, REVISION);
-    dispatch({ t: 'init-fail', reason: 'DOWNLOAD_CANCELLED' });
-    setProgressPct(0);
-  };
-
   const runInit = async (backend: 'webgpu' | 'wasm') => {
+    const attempt = initAttemptRef.current + 1;
+    initAttemptRef.current = attempt;
     setProgressPct(0);
     setInitResult(null);
+    setInitNotice(null);
+
+    let cacheBaseline: Set<string> | null = null;
+    try {
+      cacheBaseline = await snapshotModelCache();
+    } catch (err) {
+      console.warn('snapshotModelCache failed:', err);
+    }
+    if (attempt !== initAttemptRef.current) return;
+    initCacheBaselineRef.current = cacheBaseline;
 
     try {
       const api = await getApi();
@@ -67,33 +112,42 @@ export function App() {
           backend,
         },
         Comlink.proxy((p: LoadProgress) => {
-          setProgressPct(p.pct);
+          if (attempt === initAttemptRef.current) setProgressPct(p.pct);
         })
       );
+      if (attempt !== initAttemptRef.current) return;
       setInitResult(res);
       dispatch({ t: 'init-ok' });
       dispatch({ t: 'self-check-ok' });
     } catch (err) {
+      if (attempt !== initAttemptRef.current) return;
       console.error('Init failed:', err);
       dispatch({ t: 'init-fail', reason: String(err) });
+    } finally {
+      if (attempt === initAttemptRef.current) initCacheBaselineRef.current = null;
     }
   };
 
   const handleAutoInit = () => {
+    setInitNotice(null);
     const webgpuAvailable = 'gpu' in navigator;
     dispatch({ t: 'start', requested: 'auto', webgpuAvailable });
     if (webgpuAvailable) void runInit('webgpu');
   };
 
   const handleChooseWasm = () => {
+    setInitNotice(null);
     dispatch({ t: 'choose-wasm' });
     void runInit('wasm');
   };
 
   const handleRecreate = () => {
-    void recreate();
+    initAttemptRef.current += 1;
+    recreate();
     dispatch({ t: 'reset' });
+    initCacheBaselineRef.current = null;
     setInitResult(null);
+    setInitNotice(null);
     setProgressPct(0);
     setOutput('');
     setStats(null);
@@ -101,12 +155,18 @@ export function App() {
   };
 
   const handleCancelGeneration = async () => {
-    if (currentSignalIdRef.current) {
+    if (currentSignalIdRef.current && !isStopping) {
+      cancelRequestedAtRef.current = performance.now();
+      setIsStopping(true);
+      setGenerationNotice('正在停止生成...');
       try {
         const api = await getApi();
         await api.cancel(currentSignalIdRef.current);
       } catch (err) {
         console.error('Cancel generation failed:', err);
+        cancelRequestedAtRef.current = null;
+        setIsStopping(false);
+        setGenerationNotice('停止请求失败，生成仍可能继续');
       }
     }
   };
@@ -115,7 +175,12 @@ export function App() {
     setOutput('');
     setStats(null);
     setPerceivedTtft(null);
+    setGenerationNotice(null);
+    setCancelMetrics(null);
     setIsGenerating(true);
+    setIsStopping(false);
+    cancelRequestedAtRef.current = null;
+    lastTokenAtRef.current = null;
 
     const signalId = crypto.randomUUID();
     currentSignalIdRef.current = signalId;
@@ -135,6 +200,7 @@ export function App() {
         },
         signalId,
         Comlink.proxy((delta: string) => {
+          lastTokenAtRef.current = performance.now();
           setOutput((prev) => prev + delta);
           if (!firstTokenReceived) {
             firstTokenReceived = true;
@@ -150,8 +216,20 @@ export function App() {
     } catch (err) {
       console.error('Generation failed:', err);
     } finally {
+      const cancelRequestedAt = cancelRequestedAtRef.current;
+      if (cancelRequestedAt !== null) {
+        const endedAt = performance.now();
+        const lastTokenAt = lastTokenAtRef.current;
+        setCancelMetrics({
+          stopTextMs: lastTokenAt === null ? 0 : Math.max(0, lastTokenAt - cancelRequestedAt),
+          endMs: Math.max(0, endedAt - cancelRequestedAt),
+        });
+        setGenerationNotice('生成已取消');
+      }
       currentSignalIdRef.current = null;
+      cancelRequestedAtRef.current = null;
       setIsGenerating(false);
+      setIsStopping(false);
     }
   };
 
@@ -167,22 +245,31 @@ export function App() {
         </div>
       )}
       <div style={{ marginBottom: 12 }}>
-        <button onClick={handleAutoInit} disabled={WORKER_UNAVAILABLE || isInitializing || isGenerating}>
+        <button
+          onClick={handleAutoInit}
+          disabled={WORKER_UNAVAILABLE || isInitializing || isCancellingInit || isGenerating}
+        >
           {isInitializing ? `模型加载中 (${progressPct}%)...` : '加载 Qwen3-0.6B (WebGPU)'}
         </button>
         {isInitializing && (
-          <button onClick={handleCancelDownload} style={{ marginLeft: 8, color: '#d32f2f' }}>
-            取消下载
+          <button
+            onClick={handleCancelDownload}
+            disabled={isCancellingInit}
+            style={{ marginLeft: 8, color: '#d32f2f' }}
+          >
+            {isCancellingInit ? '正在取消...' : '取消加载/下载'}
           </button>
         )}
         <button
           onClick={handleRecreate}
           style={{ marginLeft: 8 }}
-          disabled={WORKER_UNAVAILABLE || isInitializing || isGenerating}
+          disabled={WORKER_UNAVAILABLE || isInitializing || isCancellingInit || isGenerating}
         >
           重启 Worker
         </button>
       </div>
+
+      {initNotice && <div style={{ color: '#8a4b08', marginBottom: 12 }}>{initNotice}</div>}
 
       {initState.status === 'needs-user-choice' && (
         <div style={{ color: 'red', marginBottom: 12 }}>
@@ -259,11 +346,27 @@ export function App() {
           {isGenerating ? '流式生成中...' : '流式生成'}
         </button>
         {isGenerating && (
-          <button onClick={handleCancelGeneration} style={{ marginLeft: 8, color: '#d32f2f' }}>
-            停止生成
+          <button
+            onClick={handleCancelGeneration}
+            disabled={isStopping}
+            style={{ marginLeft: 8, color: '#d32f2f' }}
+          >
+            {isStopping ? '停止中...' : '停止生成'}
           </button>
         )}
       </div>
+
+      {generationNotice && (
+        <div style={{ color: generationNotice === '生成已取消' ? '#8a4b08' : '#d32f2f', marginBottom: 12 }}>
+          {generationNotice}
+          {cancelMetrics && (
+            <>
+              {' '}
+              | 停止新增文字: {Math.round(cancelMetrics.stopTextMs)}ms | 任务结束: {Math.round(cancelMetrics.endMs)}ms
+            </>
+          )}
+        </div>
+      )}
 
       <div style={{ marginTop: 12 }}>
         <label style={{ fontWeight: 'bold' }}>输出内容：</label>

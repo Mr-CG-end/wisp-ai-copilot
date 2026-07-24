@@ -4,8 +4,8 @@
 
 | 文档信息 | 内容 |
 |---|---|
-| 状态 | 执行中：Task 1–8 代码与链路已完成，下一步 Task 9 |
-| 版本 | v0.1.6 |
+| 状态 | 执行中：Task 1–8 已完成，下一步 Task 9 |
+| 版本 | v0.1.8 |
 | 范围 | 阶段一技术验证 Spike（对应 PRD §13 阶段门 / 设计文档 §10 验证清单） |
 | 上游 | 设计文档 v0.2（`Wisp_设计文档.md`）· PRD v0.3（`Wisp_需求文档.md`） |
 | 作者 | Mr-CG-end |
@@ -28,6 +28,10 @@
 
 > **v0.1.6 进度同步**：Task 8 已完成代码与链路实现。Worker 侧实现基于 `StopperRegistry` 的生成中断 (`cancel`)；UI 侧集成生成中断按钮，能在生成途中请求中断；下载取消采用 Panel 侧终止并重建 Worker (`recreate`) + 清理 `transformers-cache` 缓存条目作为 100% 可靠中止手段，状态重置为可重试。测试与开发/生产构建均顺利通过。
 
+> **v0.1.7 审查修复**：下载取消不再删除该模型全部缓存；初始化前记录缓存基线，取消时仅清理本次新增且同时匹配 model ID / revision 的条目，保留既有完整 q4f16 权重。初始化 attempt ID 会丢弃旧 Worker 的进度与结果；主动取消回到可重试状态，不再误报 WebGPU 失败。生成停止新增 `stopping/cancelled` 状态与停字/结束耗时，等待真机 5 次验收。
+
+> **v0.1.8 进度同步**：Task 8 真机验收通过。连续 5 次生成取消均达到停字 ≤ 500ms、任务结束 ≤ 1s；取消缓存加载后既有 q4f16 权重仍保留；取消后立即重试未受旧 attempt 回调污染；主动取消状态可正常恢复并再次加载。
+
 ---
 
 ## 0. 当前进度与后续执行计划
@@ -43,7 +47,7 @@
 | Task 5：Worker + Comlink | 已完成 | 真机 4 次增量输出、Worker 重建与热重载均已验证；生产构建含独立 Worker chunk |
 | Task 6：真实模型加载 | 已完成 | WebGPU q4f16 到 `ready`；一步生成自检 2520ms；revision、下载主机、ORT 本地资源均已验证 |
 | Task 7：真实流式生成 | 已完成 | 真实流式生成、精确 token 计数、Worker/感知双 TTFT、流式 ThinkFilter 已集成与提交 |
-| Task 8：取消与可行性验证 | 已完成 | 生成中断 cancel 接入 UI，下载取消采用终止 Worker + 清理 Cache API，5 个测试文件 28 项单测全绿，开发/生产构建成功 |
+| Task 8：取消与可行性验证 | 已完成 | 5 次生成取消达到停字/结束阈值；下载取消保留既有完整缓存；旧 attempt 隔离与取消后重试真机通过 |
 | Task 9–10：WASM 与阶段门 | 未开始 | 阶段门尚未通过，不进入 v0.1 UI 全面开发 |
 
 ### 0.2 后续执行顺序
@@ -58,12 +62,12 @@ Task 5 与 WXT 0.20 基线已关闭，后续保持 Task 6 → 10 串行推进。
 | 4 | Task 9 | 本地打包 ORT WASM，并验证用户显式选择的 WASM 路径 | 构建产物含本地 ORT；无 CDN 请求；记录隔离、线程与 SIMD 实际结果 |
 | 5 | Task 10 | 固定基准、离线缓存和稳定性实测，形成阶段门结论 | 完成协议规定的 10+5 次测试；回填 README 与设计文档；给出 Pass / Conditional / Fail |
 
-### 0.3 下一任务（Task 7）实施切片
+### 0.3 当前任务（Task 8）验收切片
 
-1. 用真实 `model.generate()` 替换当前桩生成，接入 `TextStreamer` 与 chat template。
-2. 同时记录 Worker TTFT、用户感知 TTFT 和精确 token 数，返回可复核的 `GenStats`。
-3. 将 `ThinkFilter` 接到增量回调，确保 `<think>` 不会在流式 UI 中闪现。
-4. 复跑单测/构建，并用固定输入完成 Chrome 真机流式验收后独立提交。
+1. 连续 5 次在生成途中点击停止，记录停字与任务结束耗时，目标分别为 ≤ 500ms / ≤ 1s。
+2. 在首次下载途中取消，确认 Network 请求终止、状态回到可重试且只清理本次新增缓存。
+3. 在已有完整 q4f16 缓存的加载阶段取消，确认 `model_q4f16.onnx` 仍保留。
+4. 取消后立即重试，确认旧 attempt 的进度、成功或失败不会覆盖新任务。
 
 ---
 
@@ -574,8 +578,8 @@ async function summarize() {
 
 ### Task 8: 生成取消 + **下载取消可行性验证（终止 Worker 可靠中止 + 清缓存）**
 
-**Files**：Modify `inference.worker.ts` / `App.tsx`（用 `useInference.recreate`）
-**产出**：`cancel(signalId)` 中断生成；**下载取消不再是"设个布尔位继续下完"**，而是 Panel 侧终止并重建 Worker（可靠中止在途下载/加载）+ 显式清理该模型的 Cache 条目；并记录 transformers 是否支持原生 fetch 中止（🔬）。
+**Files**：Modify `inference.worker.ts` / `App.tsx`（用 `useInference.recreate`）；Create `cacheSelection.ts(+test)`
+**产出**：`cancel(signalId)` 中断生成；Panel 侧终止并重建 Worker 可靠中止在途下载/加载；初始化前记录缓存基线，取消时只清理本次新增且精确匹配 model ID / revision 的条目；用 attempt ID 隔离旧 Worker 回调；并记录 transformers 是否支持原生 fetch 中止（🔬）。
 
 Worker：`cancel`（生成）+ 已在 Task 6 暴露的 `dispose`：
 
@@ -588,25 +592,20 @@ Panel 下载取消（可靠路径）：
 
 ```tsx
 async function cancelDownload() {
-  recreate();                                   // 终止旧 Worker（杀死在途下载/加载）+ 建新 Worker
-  await clearModelCache(MODEL_ID, REVISION);    // 显式清理半成品缓存，避免伪装成"已完成"
-  dispatch({ t: 'init-fail', reason: 'DOWNLOAD_CANCELLED' });
+  invalidateCurrentAttempt();
+  recreate();                                      // 终止旧 Worker（杀死在途下载/加载）+ 建新 Worker
+  await clearEntriesAddedSince(cacheBaseline);     // 只清本次新增项，保留既有完整缓存
+  dispatch({ t: 'reset' });                        // 主动取消不是 WebGPU 失败
 }
 
-// 清理 Transformers.js 的 Cache API 条目（cache 名以运行时实际为准，默认 'transformers-cache' 🔬）
-async function clearModelCache(modelId: string, revision: string) {
-  try {
-    const cache = await caches.open('transformers-cache');
-    const keys = await cache.keys();
-    await Promise.all(keys.filter(r => r.url.includes(modelId)).map(r => cache.delete(r)));
-  } catch (e) { console.warn('clearModelCache', e); }
-}
+// runInit 的 progress / success / failure 更新前均检查 attempt === currentAttempt。
+// clearEntriesAddedSince 同时匹配 model ID、revision，并排除初始化前已存在的 URL。
 ```
 
 **可行性调查步骤（记录结论，不提前宣称已实现）**：
 - 调查 transformers.js 是否可把 `AbortController.signal` 透传给权重下载 fetch（`env` / `from_pretrained` 是否有 signal 钩子）。有 → 记录并可后续采用；无（预期）→ 以"终止 Worker + 清缓存"为可靠中止手段。
 
-- [ ] 写代码 → `npm run dev`：① 生成途中「停止」→ 约 1s 内停住（记录实际停字/结束耗时）；② 首次下载途中「取消下载」→ 网络请求随 Worker 终止而中断、缓存被清、状态回可重试、**再次加载会重新下载**（证明不是伪完成）；记录原生 fetch 中止可行性 → 提交 `feat: 生成中断 + 下载取消(终止Worker可靠中止+清缓存)`
+- [x] `npm run build:dev` 后真机验证：① 生成途中「停止」连续 5 次，停字 ≤ 500ms、结束 ≤ 1s；② 首次下载途中取消，网络请求随 Worker 终止而中断，本次新增缓存被清且状态可重试；③ 已有完整缓存的加载阶段取消，既有 q4f16 权重仍保留；④ 取消后立即重试不受旧 attempt 回调污染；原生 fetch 暂无可用中止钩子，采用终止 Worker 可靠中止
 
 ### Task 9: ORT WASM 隔离探测 + WASM 后端可用
 
