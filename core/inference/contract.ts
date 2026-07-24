@@ -40,7 +40,8 @@ export interface InferenceApi {
   getStatus(): Promise<{
     loaded: boolean;
     backend?: 'webgpu' | 'wasm';
-    crossOriginIsolated?: boolean;
+    crossOriginIsolated: boolean;
+    sharedArrayBufferAvailable: boolean;
     numThreads?: number;
   }>;
 }

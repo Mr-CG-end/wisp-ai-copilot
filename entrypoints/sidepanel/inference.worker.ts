@@ -187,6 +187,7 @@ const api: Partial<InferenceApi> = {
       loaded: !!model,
       backend: currentBackend ?? undefined,
       crossOriginIsolated: typeof self !== 'undefined' ? Boolean(self.crossOriginIsolated) : false,
+      sharedArrayBufferAvailable: typeof SharedArrayBuffer !== 'undefined',
       numThreads: env.backends.onnx.wasm!.numThreads,
     };
   },

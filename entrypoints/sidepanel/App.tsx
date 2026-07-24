@@ -54,7 +54,11 @@ export function App() {
   const [initNotice, setInitNotice] = useState<string | null>(null);
   const [isCancellingInit, setIsCancellingInit] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
-  const [workerStatus, setWorkerStatus] = useState<{ crossOriginIsolated?: boolean; numThreads?: number } | null>(null);
+  const [workerStatus, setWorkerStatus] = useState<{
+    crossOriginIsolated: boolean;
+    sharedArrayBufferAvailable: boolean;
+    numThreads?: number;
+  } | null>(null);
   const [generationNotice, setGenerationNotice] = useState<string | null>(null);
   const [cancelMetrics, setCancelMetrics] = useState<CancelMetrics | null>(null);
   const currentSignalIdRef = useRef<string | null>(null);
@@ -92,6 +96,7 @@ export function App() {
     initAttemptRef.current = attempt;
     setProgressPct(0);
     setInitResult(null);
+    setWorkerStatus(null);
     setInitNotice(null);
 
     let cacheBaseline: Set<string> | null = null;
@@ -120,7 +125,11 @@ export function App() {
       setInitResult(res);
       const status = await api.getStatus();
       if (attempt === initAttemptRef.current) {
-        setWorkerStatus({ crossOriginIsolated: status.crossOriginIsolated, numThreads: status.numThreads });
+        setWorkerStatus({
+          crossOriginIsolated: status.crossOriginIsolated,
+          sharedArrayBufferAvailable: status.sharedArrayBufferAvailable,
+          numThreads: status.numThreads,
+        });
       }
       dispatch({ t: 'init-ok' });
       dispatch({ t: 'self-check-ok' });
@@ -152,6 +161,7 @@ export function App() {
     dispatch({ t: 'reset' });
     initCacheBaselineRef.current = null;
     setInitResult(null);
+    setWorkerStatus(null);
     setInitNotice(null);
     setProgressPct(0);
     setOutput('');
@@ -254,7 +264,18 @@ export function App() {
           onClick={handleAutoInit}
           disabled={WORKER_UNAVAILABLE || isInitializing || isCancellingInit || isGenerating}
         >
-          {isInitializing ? `模型加载中 (${progressPct}%)...` : '加载 Qwen3-0.6B (WebGPU)'}
+          {isInitializing && initState.backend === 'webgpu'
+            ? `WebGPU 模型加载中 (${progressPct}%)...`
+            : '加载 Qwen3-0.6B (WebGPU)'}
+        </button>
+        <button
+          onClick={handleChooseWasm}
+          disabled={WORKER_UNAVAILABLE || isInitializing || isCancellingInit || isGenerating}
+          style={{ marginLeft: 8 }}
+        >
+          {isInitializing && initState.backend === 'wasm'
+            ? `WASM q8 模型加载中 (${progressPct}%)...`
+            : '加载 Qwen3-0.6B (WASM q8)'}
         </button>
         {isInitializing && (
           <button
@@ -278,10 +299,7 @@ export function App() {
 
       {initState.status === 'needs-user-choice' && (
         <div style={{ color: 'red', marginBottom: 12 }}>
-          WebGPU 不可用或加载失败：{initState.reason}
-          <div style={{ marginTop: 8 }}>
-            <button onClick={handleChooseWasm}>用 WASM 兼容模式（将另行下载 q8）</button>
-          </div>
+          WebGPU 不可用或加载失败：{initState.reason}。可使用上方 WASM q8 兼容模式。
         </div>
       )}
 
@@ -295,7 +313,16 @@ export function App() {
           {workerStatus && (
             <span>
               {' '}
-              | 跨源隔离: {workerStatus.crossOriginIsolated ? '已开启 (SAB/多线程)' : '未开启 (单线程)'}
+              | 跨源隔离: {workerStatus.crossOriginIsolated ? '已开启' : '未开启'}
+              {' '}| SharedArrayBuffer: {workerStatus.sharedArrayBufferAvailable ? '可用' : '不可用'}
+              {initResult.backend === 'wasm' && (
+                <>
+                  {' '}| WASM 线程配置:{' '}
+                  {workerStatus.numThreads === undefined
+                    ? '自动（实际线程数由 ORT 决定）'
+                    : workerStatus.numThreads}
+                </>
+              )}
             </span>
           )}
         </div>
