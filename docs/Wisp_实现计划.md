@@ -4,17 +4,59 @@
 
 | 文档信息 | 内容 |
 |---|---|
-| 状态 | 草案，待评审 |
-| 版本 | v0.1.1 |
+| 状态 | 执行中：Task 1–5 已完成，Task 6 审查中 |
+| 版本 | v0.1.3 |
 | 范围 | 阶段一技术验证 Spike（对应 PRD §13 阶段门 / 设计文档 §10 验证清单） |
 | 上游 | 设计文档 v0.2（`Wisp_设计文档.md`）· PRD v0.3（`Wisp_需求文档.md`） |
 | 作者 | Mr-CG-end |
 | 创建日期 | 2026-07-22 |
-| 更新日期 | 2026-07-22 |
+| 更新日期 | 2026-07-24 |
 | 交付物 | 可载入 Chrome 的最小扩展：加载 Qwen3-0.6B → 流式生成 → 取消 → 后端选择；可信实测数据回填 §10 |
 | 执行约定 | TDD（纯逻辑先测后写）· 频繁小步提交 · 提交不加署名尾行，作者 Mr-CG-end |
 
 > **v0.1.1 修订（吸收外部技术评审）**：修正 tokens/s 统计口径（精确 token 计数）、TTFT 双口径（Worker + 用户感知）、Thinking **增量**过滤（跨分片）、下载取消改为"可行性验证 + 终止 Worker 可靠中止"、统一 `disposeLoaded()` 资源释放、Task 9 显式尝试跨源隔离并如实记录、Worker 生命周期与代理释放、ORT 拷贝脚本化、Worker 不碰 `chrome.*`（ORT 基址经 `InitConfig` 传入）、下载进度聚合、固定基准 fixture 与可复现协议、扩展实测指标、**下载前锁定 revision**、明确阶段门 通过/条件通过/失败标准。契约变更已同步设计文档 §2.3。
+
+> **v0.1.2 进度同步**：依据 `feat/stage1-spike` 分支提交与 2026-07-23 本地复核，Task 1–5 的代码已落地；Task 1 人工回归已验证完成；`npm test` 为 4 个测试文件、24 项测试全绿，`npm run build` 成功；Task 6 尚未开始。
+
+> **v0.1.3 进度同步**：Task 5 已通过 Chrome 真机流式、Worker 重建与热重载验收并独立提交；Worker 改用 Vite `?worker` 显式导入，生产构建会生成独立 Worker chunk。WXT 已升级到 0.20.27 并独立提交，开发/生产输出分别为 `chrome-mv3-dev` / `chrome-mv3`。Task 6 已进入代码审查。
+
+---
+
+## 0. 当前进度与后续执行计划
+
+### 0.1 当前进度
+
+| 范围 | 状态 | 复核证据 / 剩余项 |
+|---|---|---|
+| Task 1：项目骨架 | 已完成 | 配置、入口和侧边栏已验证完成；在 Chrome 中成功载入且控制台无报错 |
+| Task 2：契约、模板与思考过滤 | 已完成 | 对应源码与测试已提交；相关测试全绿 |
+| Task 3：取消注册表 | 已完成 | 对应源码与测试已提交；相关测试全绿 |
+| Task 4：后端选择状态机 | 已完成 | 对应源码与测试已提交；相关测试全绿 |
+| Task 5：Worker + Comlink | 已完成 | 真机 4 次增量输出、Worker 重建与热重载均已验证；生产构建含独立 Worker chunk |
+| Task 6：真实模型加载 | 审查中 | revision 已锁定；正在核对加载、自检、释放、进度聚合与后端状态机 |
+| Task 7–10：生成、取消、WASM 与阶段门 | 未开始 | 阶段门尚未通过，不进入 v0.1 UI 全面开发 |
+
+### 0.2 后续执行顺序
+
+Task 5 与 WXT 0.20 基线已关闭，后续保持 Task 6 → 10 串行推进。运行时任务共享 Worker、模型缓存和测量口径，前一任务的人工验收通过后再进入下一任务，避免错误叠加。
+
+| 顺序 | 任务 | 本轮目标 | 完成判据 |
+|---|---|---|---|
+| 1 | Task 6 | 锁定 revision，完成 WebGPU 模型加载、自检、释放与进度聚合 | 下载前写入确切 sha；WebGPU 到 `ready`，失败只到 `needs-user-choice`；记录实际 CSP 主机 |
+| 2 | Task 7 | 接入真实流式生成、精确 token 计数、双口径 TTFT 和增量过滤 | 固定输入可流式生成；不显示 `<think>`；统计口径可复核 |
+| 3 | Task 8 | 验证生成停止与下载取消 | 生成约 1s 内结束；下载取消会终止 Worker、清半成品缓存并可重新下载 |
+| 4 | Task 9 | 本地打包 ORT WASM，并验证用户显式选择的 WASM 路径 | 构建产物含本地 ORT；无 CDN 请求；记录隔离、线程与 SIMD 实际结果 |
+| 5 | Task 10 | 固定基准、离线缓存和稳定性实测，形成阶段门结论 | 完成协议规定的 10+5 次测试；回填 README 与设计文档；给出 Pass / Conditional / Fail |
+
+### 0.3 下一任务（Task 6）实施切片
+
+0. **关闭基线（已完成）**：Task 5 与 WXT 0.20 升级已分别提交，Task 6 未混入上述提交。
+1. **锁定 revision**：查询 `onnx-community/Qwen3-0.6B-ONNX` 当前确切 commit sha，写入 `REVISION` 常量并检查 diff；在此之前不点击加载、不产生模型大文件下载。
+2. **实现 Worker 加载核心**：加入 `init`、`disposeLoaded`、总体进度聚合和一步自检；每次初始化前释放旧模型，初始化或自检失败时也必须释放并清空状态。
+3. **接入 Panel 状态机**：以 `backend.ts` 的 `reduce()` 驱动加载界面；默认只尝试 WebGPU，失败进入 `needs-user-choice`，只有用户点击后才允许走 WASM；展示总体进度、后端、自检耗时和错误原因。
+4. **自动验证**：运行类型检查、24 项既有单测和生产构建；确认模型代码只进入 Worker chunk，Panel 主包不直接引入 Transformers.js；为新增的纯进度逻辑补最小单测。
+5. **Chrome 真机验收**：首次加载记录 Network 实际下载主机并回填 CSP；确认进度显示不倒退、最终到 `ready（webgpu）`，重复加载前会释放旧模型；显式验证失败路径不会自动发起 WASM 下载。
+6. **关闭 Task 6**：记录锁定 sha、下载主机、自检耗时和已知限制，复跑测试/构建后独立提交。
 
 ---
 
@@ -28,7 +70,7 @@
 
 ## 2. 技术栈与全局约束
 
-**技术栈**：WXT(MV3) · React 18 · TypeScript · Vite · `@huggingface/transformers` 3.x · ONNX Runtime Web(随 transformers) · Comlink · Vitest。
+**技术栈**：WXT 0.20(MV3) · React 18 · TypeScript · Vite 8 · `@huggingface/transformers` 3.x · ONNX Runtime Web(随 transformers) · Comlink · Vitest。
 
 **架构**：最小 WXT+React 骨架；一个 Dedicated Web Worker 用 Transformers.js 承载全部推理，Side Panel 经 Comlink 调用它并接收流式 token。**"策略"（要不要回退、进哪个后端、生命周期）在 Panel；"机制"（照指令加载/生成/释放）在 Worker，Worker 不访问任何 `chrome.*` API**。后端选择、chat 模板/转义、思考增量过滤、取消注册表等纯逻辑放 `core/`，用 Vitest 单测。
 
@@ -82,14 +124,15 @@ wisp/
 **Files**：Create `package.json`（含 `version`）/ `tsconfig.json` / `wxt.config.ts` / `vitest.config.ts` / `.gitignore` / `entrypoints/background.ts` / `entrypoints/sidepanel/{index.html,main.tsx,App.tsx}`
 **产出**：可 `npm run dev` 载入 Chrome 的 MV3 扩展，点图标开侧边栏显示 "Wisp spike"。
 
-- [ ] `package.json`：scripts `dev/build/test/postinstall:wxt prepare`；deps `@huggingface/transformers`、`comlink`、`react`、`react-dom`；devDeps `wxt`、`@wxt-dev/module-react`、`typescript`、`vitest`、`@types/*`
-- [ ] `wxt.config.ts`：`modules:['@wxt-dev/module-react']`；manifest `permissions:['sidePanel','storage']`、`action:{}`、CSP `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' <hf 主机>`
-- [ ] `vitest.config.ts`：`environment:'node'`，`include:['core/**/*.test.ts']`；`tsconfig.json`：`extends ./.wxt/tsconfig.json`、`jsx:react-jsx`、`strict`
-- [ ] `.gitignore`：`node_modules`/`.output`/`.wxt`/`stats.html`/`*.zip`
-- [ ] `background.ts`：`defineBackground` 内 `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`；侧边栏三件套占位 "Wisp spike"
-- [ ] `npm install`（`wxt prepare` 生成 `.wxt/`）
-- [ ] 验证：`npm run build` 编译出 `.output/chrome-mv3/`（自动化）；`npm run dev` 载入见 "Wisp spike"、控制台无报错（人工）
-- [ ] 提交 `chore: WXT+React+Vitest 骨架，侧边栏可载入`
+- [x] `package.json`：scripts `dev/build/test/postinstall:wxt prepare`；deps `@huggingface/transformers`、`comlink`、`react`、`react-dom`；devDeps `wxt`、`@wxt-dev/module-react`、`typescript`、`vitest`、`@types/*`
+- [x] `wxt.config.ts`：`modules:['@wxt-dev/module-react']`；manifest `permissions:['sidePanel','storage']`、`action:{}`、CSP `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' <hf 主机>`
+- [x] `vitest.config.ts`：`environment:'node'`，`include:['core/**/*.test.ts']`；`tsconfig.json`：`extends ./.wxt/tsconfig.json`、`jsx:react-jsx`、`strict`
+- [x] `.gitignore`：`node_modules`/`.output`/`.wxt`/`stats.html`/`*.zip`
+- [x] `background.ts`：`defineBackground` 内 `chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`；侧边栏三件套占位 "Wisp spike"
+- [x] `npm install`（`wxt prepare` 生成 `.wxt/`）
+- [x] 自动验证：`npm run build` 编译出 `.output/chrome-mv3/`（2026-07-23 复核通过）
+- [x] 人工回归：当前分支用 `npm run dev` 载入 Chrome，确认显示 "Wisp spike" 且控制台无报错
+- [x] 提交 `chore: WXT+React+Vitest 骨架，侧边栏可载入`
 
 ### Task 2: 契约类型 + chat 模板/转义 + 流式思考过滤（纯逻辑 TDD）
 
@@ -223,7 +266,7 @@ export class ThinkFilter {
 
 失败测试要点（`thinkFilter.test.ts`）：普通文本原样透传；整段 `<think>..</think>` 一次移除；标签**跨分片** `"<thi"|"nk>x"|"</th"|"ink>y"` → 仅剩 `y`；think 内容被丢弃；**未闭合** `<think>` 至 `flush` 丢弃；**空** `<think></think>` → 空；普通文本中的 `<`（`"a<b"`）不被错误挂起；多段 think。
 
-- [ ] 写 `contract.ts` → 写 chatTemplate/thinkFilter 失败测试 → `npm test` 失败 → 实现 → 通过 → 提交 `feat: 契约类型 + chat 模板/转义 + 流式思考过滤（单测覆盖）`
+- [x] 写 `contract.ts` → 写 chatTemplate/thinkFilter 失败测试 → `npm test` 失败 → 实现 → 通过 → 提交 `feat: 契约类型 + chat 模板/转义 + 流式思考过滤（单测覆盖）`
 
 ### Task 3: 取消注册表 StopperRegistry（纯逻辑 TDD）
 
@@ -243,7 +286,7 @@ export class StopperRegistry {
 
 测试：interrupt 调用 stopper 并移除并返回 true；未知 id 返回 false 不抛错；release 不触发 interrupt。
 
-- [ ] 写失败测试 → 跑失败 → 实现 → 跑通 → 提交 `feat: 生成取消注册表 StopperRegistry（单测覆盖）`
+- [x] 写失败测试 → 跑失败 → 实现 → 跑通 → 提交 `feat: 生成取消注册表 StopperRegistry（单测覆盖）`
 
 ### Task 4: 后端选择状态机 reduce()（纯逻辑 TDD，编码「不自动回退」红线）
 
@@ -285,7 +328,7 @@ export function reduce(state: InitState, ev: InitEvent): InitState {
 
 测试关键用例：WebGPU 全程成功→`ready webgpu`；WebGPU 初始化失败/自检失败/无 WebGPU→`needs-user-choice`（**绝不自动进 wasm**）；`choose-wasm` 后→wasm 并 `ready`；wasm 失败→`error`。
 
-- [ ] 写失败测试 → 跑失败 → 实现 → 三个纯逻辑模块单测全绿 → 提交 `feat: 后端选择状态机，编码不自动回退红线（单测覆盖）`
+- [x] 写失败测试 → 跑失败 → 实现 → 三个纯逻辑模块单测全绿 → 提交 `feat: 后端选择状态机，编码不自动回退红线（单测覆盖）`
 
 ### Task 5: Worker + Comlink 打通 + **Worker 生命周期管理**（先验证 RPC/流式，不加载模型）
 
@@ -313,6 +356,7 @@ Comlink.expose(api);
 import * as Comlink from 'comlink';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InferenceApi } from '../../core/inference/contract';
+import InferenceWorker from './inference.worker?worker';
 
 type Handle = { worker: Worker; api: Comlink.Remote<InferenceApi> };
 
@@ -321,7 +365,7 @@ export function useInference() {
   const [, bump] = useState(0);
 
   const spawn = useCallback((): Handle => {
-    const worker = new Worker(new URL('./inference.worker.ts', import.meta.url), { type: 'module' });
+    const worker = new InferenceWorker();
     const api = Comlink.wrap<InferenceApi>(worker);
     ref.current = { worker, api };
     return ref.current;
@@ -346,7 +390,8 @@ export function useInference() {
 
 `App.tsx`（桩生成，验证 `Comlink.proxy` 回调）：调用 `getApi().generate({...}, crypto.randomUUID(), Comlink.proxy(delta => setOut(s=>s+delta)))`，`pre` 逐段显示。
 
-- [ ] 写三文件 → `npm run dev`：点「桩生成」→ `pre` 逐段出现 "你好，这是流式测试。"（4 次追加），无 Comlink 报错；改动组件触发一次热重载确认不产生多余 Worker（DevTools → Application/Workers 或日志）→ 提交 `feat: Worker+Comlink 打通 + Worker 生命周期管理`
+- [x] 写三文件 → `npm run dev`：点「桩生成」→ `pre` 逐段出现 "你好，这是流式测试。"（4 次追加），无 Comlink 报错；改动组件触发一次热重载确认不产生多余 Worker（DevTools → Application/Workers 或日志）
+- [x] 提交 `feat: Worker+Comlink 打通 + Worker 生命周期管理`
 
 ### Task 6: Worker 真实加载 Qwen3-0.6B + **下载前锁定 revision** + 自检 + **dispose** + **进度聚合**
 
