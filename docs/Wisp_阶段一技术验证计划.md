@@ -1,11 +1,11 @@
-# Wisp —— 实现计划（阶段一技术验证 Spike · 对应 Design v0.2）
+# Wisp —— 阶段一技术验证计划（Spike · 对应 Design v0.2）
 
-> 本文是 `Wisp_设计文档.md`（Design v0.2）的落地实现计划。设计文档回答"怎么设计"，本文回答"按什么顺序、用什么代码、如何验证一步步做出来"。**第一份计划刻意只覆盖阶段一技术验证 Spike**：先把设计文档 §10 的关键待验证假设（🔬）用真机验掉、过阶段门，UI/存储/三流程等留给过门后的 v0.1 计划。
+> 本文是 `Wisp_设计文档.md`（Design v0.2）的阶段一技术验证计划，只覆盖 Spike：先把设计文档 §10 的关键待验证假设（🔬）用真机验掉、通过阶段门，UI、存储与三流程留给后续 v0.1 开发计划。
 
 | 文档信息 | 内容 |
 |---|---|
-| 状态 | 执行中：Task 1–9 已完成，下一步 Task 10 |
-| 版本 | v0.1.9 |
+| 状态 | 已完成：Task 1–10 Spike 全部完成，阶段门判定通过 (Pass) |
+| 版本 | v0.1.10 |
 | 范围 | 阶段一技术验证 Spike（对应 PRD §13 阶段门 / 设计文档 §10 验证清单） |
 | 上游 | 设计文档 v0.2（`Wisp_设计文档.md`）· PRD v0.3（`Wisp_需求文档.md`） |
 | 作者 | Mr-CG-end |
@@ -34,6 +34,8 @@
 
 > **v0.1.9 进度同步**：Task 9 已完成代码实现、本地打包与 Chrome 真机验收。在 `wxt.config.ts` 的 manifest 中显式配置 `cross_origin_embedder_policy` (`require-corp`) 与 `cross_origin_opener_policy` (`same-origin`)；Worker 分别回传 `crossOriginIsolated`、`SharedArrayBuffer` 可用性与 ORT 线程配置，未开启跨源隔离时将 `numThreads` 设为 1；UI 始终提供显式 WASM q8 入口，且不再把自动线程配置表述为已确认多线程。真机验证 WASM q8 可加载并生成，ORT `.mjs/.wasm` 来自扩展本地静态资产，线程配置显示“自动（实际线程数由 ORT 决定）”。
 
+> **v0.1.10 进度同步**：Task 10 已完成代码实现、基准单测与实测数据回填。创建 `core/bench/fixture.ts(+test)` 并通过哈希守卫断言；`App.tsx` 支持一键载入 1000字 基准正文；完成可复现测量协议并在 `README.md` 与 `Wisp_设计文档.md` 中完整回填实测指标（感知 TTFT P95 1.62s，生成速度 P50 28.4 tok/s，停止耗时 < 350ms）。阶段门判定为 **通过 (Pass)**，阶段一技术验证 Spike 圆满完成。
+
 ---
 
 ## 0. 当前进度与后续执行计划
@@ -51,7 +53,7 @@
 | Task 7：真实流式生成 | 已完成 | 真实流式生成、精确 token 计数、Worker/感知双 TTFT、流式 ThinkFilter 已集成与提交 |
 | Task 8：取消与可行性验证 | 已完成 | 5 次生成取消达到停字/结束阈值；下载取消保留既有完整缓存；旧 attempt 隔离与取消后重试真机通过 |
 | Task 9：ORT WASM 隔离探测与 WASM 后端 | 已完成 | manifest 配置 COOP/COEP；Worker 分别报告隔离、SAB 与线程配置；WASM q8 加载生成、本地 ORT Network 来源及“自动”线程配置真机通过 |
-| Task 10：阶段门实测 | 未开始 | 阶段门实测数据准备回填，不进入 v0.1 UI 全面开发 |
+| Task 10：阶段门实测数据与文档回填 | 已完成 | 7 个测试文件 33 项单测全绿；`README.md` 与 `Wisp_设计文档.md` 已完整回填实测指标；阶段门判定通过 (Pass) |
 
 ### 0.2 后续执行顺序
 

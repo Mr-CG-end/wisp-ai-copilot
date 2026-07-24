@@ -4,6 +4,7 @@ import { useInference } from './useInference';
 import type { GenerateRequest, GenStats, Lang, LoadProgress, InitResult } from '../../core/inference/contract';
 import { reduce } from '../../core/inference/backend';
 import { selectNewModelCacheUrls } from '../../core/inference/cacheSelection';
+import { BENCH_TEXT, BENCH_PARAMS } from '../../core/bench/fixture';
 
 const MODEL_ID = 'onnx-community/Qwen3-0.6B-ONNX';
 const REVISION = 'da1453100cf3ff33ef56d17983fc7a8648706db6';
@@ -248,12 +249,18 @@ export function App() {
     }
   };
 
+  const handleLoadBenchFixture = () => {
+    setInputText(BENCH_TEXT);
+    setTaskType('summary');
+    setGenerationNotice('已载入 1000字 基准 Fixture 输入与参数 (maxNewTokens: 256, temp: 0)');
+  };
+
   const isInitializing = initState.status === 'initializing' || initState.status === 'self-check';
   const isReady = initState.status === 'ready';
 
   return (
     <main style={{ padding: 16, fontFamily: 'system-ui' }}>
-      <h2>Wisp Spike (Task 9)</h2>
+      <h2>Wisp Spike (Task 10)</h2>
       {WORKER_UNAVAILABLE && (
         <div style={{ color: '#8a4b08', marginBottom: 12 }}>
           WXT 实时开发模式不支持扩展 Worker。请运行 npm run build:dev 后重新加载扩展。
@@ -342,7 +349,16 @@ export function App() {
           <option value="translate">翻译 (translate)</option>
         </select>
 
-        <label style={{ display: 'block', fontWeight: 'bold', marginBottom: 4 }}>待处理文本 (material)：</label>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <label style={{ fontWeight: 'bold' }}>待处理文本 (material)：</label>
+          <button
+            onClick={handleLoadBenchFixture}
+            disabled={!isReady || isGenerating}
+            style={{ fontSize: 12, padding: '2px 6px' }}
+          >
+            载入 1000字 基准 Fixture
+          </button>
+        </div>
         <textarea
           rows={3}
           value={inputText}
