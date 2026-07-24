@@ -6,6 +6,7 @@ export interface LoadProgress {
   file: string; // 最近更新的文件名（诊断用）
   loaded: number; // 已知文件累计已下载字节（总体，见 Worker 聚合）
   total: number; // 已知文件累计总字节（随发现新文件而增长）
+  pct: number; // 单调显示进度；模型自检通过后才为 100
 }
 
 export interface InitConfig {
@@ -13,7 +14,6 @@ export interface InitConfig {
   revision: string; // 必须是「下载前」锁定的确切 commit sha
   quant: { webgpu: 'q4f16'; wasm: 'q8' };
   backend?: 'webgpu' | 'wasm';
-  ortBaseUrl: string; // ORT 本地资产基址；由 Side Panel 传入，Worker 不碰 chrome.*
 }
 export interface InitResult { backend: 'webgpu' | 'wasm'; ready: boolean; selfCheckMs: number; }
 

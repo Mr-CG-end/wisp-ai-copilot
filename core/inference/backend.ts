@@ -14,7 +14,8 @@ export type InitEvent =
   | { t: 'init-fail'; reason: string }
   | { t: 'self-check-ok' }
   | { t: 'self-check-fail'; reason: string }
-  | { t: 'choose-wasm' };
+  | { t: 'choose-wasm' }
+  | { t: 'reset' };
 
 // 后端选择状态机。红线：WebGPU 失败绝不自动回退 WASM，只有用户显式选择才走 WASM。
 export function reduce(state: InitState, ev: InitEvent): InitState {
@@ -40,5 +41,7 @@ export function reduce(state: InitState, ev: InitEvent): InitState {
         : { status: 'error', reason: ev.reason };
     case 'choose-wasm':
       return { status: 'initializing', backend: 'wasm' };
+    case 'reset':
+      return { status: 'idle' };
   }
 }

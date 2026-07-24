@@ -4,8 +4,8 @@
 
 | 文档信息 | 内容 |
 |---|---|
-| 状态 | 执行中：Task 1–5 已完成，Task 6 审查中 |
-| 版本 | v0.1.3 |
+| 状态 | 执行中：Task 1–6 已完成，下一步 Task 7 |
+| 版本 | v0.1.4 |
 | 范围 | 阶段一技术验证 Spike（对应 PRD §13 阶段门 / 设计文档 §10 验证清单） |
 | 上游 | 设计文档 v0.2（`Wisp_设计文档.md`）· PRD v0.3（`Wisp_需求文档.md`） |
 | 作者 | Mr-CG-end |
@@ -14,11 +14,15 @@
 | 交付物 | 可载入 Chrome 的最小扩展：加载 Qwen3-0.6B → 流式生成 → 取消 → 后端选择；可信实测数据回填 §10 |
 | 执行约定 | TDD（纯逻辑先测后写）· 频繁小步提交 · 提交不加署名尾行，作者 Mr-CG-end |
 
-> **v0.1.1 修订（吸收外部技术评审）**：修正 tokens/s 统计口径（精确 token 计数）、TTFT 双口径（Worker + 用户感知）、Thinking **增量**过滤（跨分片）、下载取消改为"可行性验证 + 终止 Worker 可靠中止"、统一 `disposeLoaded()` 资源释放、Task 9 显式尝试跨源隔离并如实记录、Worker 生命周期与代理释放、ORT 拷贝脚本化、Worker 不碰 `chrome.*`（ORT 基址经 `InitConfig` 传入）、下载进度聚合、固定基准 fixture 与可复现协议、扩展实测指标、**下载前锁定 revision**、明确阶段门 通过/条件通过/失败标准。契约变更已同步设计文档 §2.3。
+> **v0.1.1 修订（吸收外部技术评审）**：修正 tokens/s 统计口径（精确 token 计数）、TTFT 双口径（Worker + 用户感知）、Thinking **增量**过滤（跨分片）、下载取消改为"可行性验证 + 终止 Worker 可靠中止"、统一 `disposeLoaded()` 资源释放、Task 9 显式尝试跨源隔离并如实记录、Worker 生命周期与代理释放、ORT 本地打包、下载进度聚合、固定基准 fixture 与可复现协议、扩展实测指标、**下载前锁定 revision**、明确阶段门 通过/条件通过/失败标准。契约变更已同步设计文档 §2.3。
 
 > **v0.1.2 进度同步**：依据 `feat/stage1-spike` 分支提交与 2026-07-23 本地复核，Task 1–5 的代码已落地；Task 1 人工回归已验证完成；`npm test` 为 4 个测试文件、24 项测试全绿，`npm run build` 成功；Task 6 尚未开始。
 
 > **v0.1.3 进度同步**：Task 5 已通过 Chrome 真机流式、Worker 重建与热重载验收并独立提交；Worker 改用 Vite `?worker` 显式导入，生产构建会生成独立 Worker chunk。WXT 已升级到 0.20.27 并独立提交，开发/生产输出分别为 `chrome-mv3-dev` / `chrome-mv3`。Task 6 已进入代码审查。
+
+> **Task 6 审查修复（2026-07-24）**：已移除提前覆盖 ORT WASM 路径的问题，将其留到 Task 9；Panel 已接入后端状态机，Worker 重建会重置就绪状态；模型权重进度采用纯逻辑聚合并保证显示不倒退。Hugging Face HEAD 实测权重下载主机为 `us.aws.cdn.hf.co`，已精确加入 CSP。类型检查、5 个测试文件共 28 项测试、生产构建均通过，等待 Chrome 首次下载与 WebGPU 自检。
+
+> **v0.1.4 进度同步**：Task 6 已在 Chrome 真机完成 WebGPU q4f16 下载与一步生成自检，锁定 revision `da1453100cf3ff33ef56d17983fc7a8648706db6`，实测自检耗时 2520ms。下载链路补齐 `us.aws.cdn.hf.co` 与 `cas-bridge.xethub.hf.co`；ORT `.mjs/.wasm` 通过 Vite URL 资源导入本地打包，未放行远程可执行代码。WXT 实时服务的跨来源 Worker 与 MV3 不兼容，模型验收改用 `npm run build:dev` 静态开发构建。
 
 ---
 
@@ -33,7 +37,7 @@
 | Task 3：取消注册表 | 已完成 | 对应源码与测试已提交；相关测试全绿 |
 | Task 4：后端选择状态机 | 已完成 | 对应源码与测试已提交；相关测试全绿 |
 | Task 5：Worker + Comlink | 已完成 | 真机 4 次增量输出、Worker 重建与热重载均已验证；生产构建含独立 Worker chunk |
-| Task 6：真实模型加载 | 审查中 | revision 已锁定；正在核对加载、自检、释放、进度聚合与后端状态机 |
+| Task 6：真实模型加载 | 已完成 | WebGPU q4f16 到 `ready`；一步生成自检 2520ms；revision、下载主机、ORT 本地资源均已验证 |
 | Task 7–10：生成、取消、WASM 与阶段门 | 未开始 | 阶段门尚未通过，不进入 v0.1 UI 全面开发 |
 
 ### 0.2 后续执行顺序
@@ -48,15 +52,12 @@ Task 5 与 WXT 0.20 基线已关闭，后续保持 Task 6 → 10 串行推进。
 | 4 | Task 9 | 本地打包 ORT WASM，并验证用户显式选择的 WASM 路径 | 构建产物含本地 ORT；无 CDN 请求；记录隔离、线程与 SIMD 实际结果 |
 | 5 | Task 10 | 固定基准、离线缓存和稳定性实测，形成阶段门结论 | 完成协议规定的 10+5 次测试；回填 README 与设计文档；给出 Pass / Conditional / Fail |
 
-### 0.3 下一任务（Task 6）实施切片
+### 0.3 下一任务（Task 7）实施切片
 
-0. **关闭基线（已完成）**：Task 5 与 WXT 0.20 升级已分别提交，Task 6 未混入上述提交。
-1. **锁定 revision**：查询 `onnx-community/Qwen3-0.6B-ONNX` 当前确切 commit sha，写入 `REVISION` 常量并检查 diff；在此之前不点击加载、不产生模型大文件下载。
-2. **实现 Worker 加载核心**：加入 `init`、`disposeLoaded`、总体进度聚合和一步自检；每次初始化前释放旧模型，初始化或自检失败时也必须释放并清空状态。
-3. **接入 Panel 状态机**：以 `backend.ts` 的 `reduce()` 驱动加载界面；默认只尝试 WebGPU，失败进入 `needs-user-choice`，只有用户点击后才允许走 WASM；展示总体进度、后端、自检耗时和错误原因。
-4. **自动验证**：运行类型检查、24 项既有单测和生产构建；确认模型代码只进入 Worker chunk，Panel 主包不直接引入 Transformers.js；为新增的纯进度逻辑补最小单测。
-5. **Chrome 真机验收**：首次加载记录 Network 实际下载主机并回填 CSP；确认进度显示不倒退、最终到 `ready（webgpu）`，重复加载前会释放旧模型；显式验证失败路径不会自动发起 WASM 下载。
-6. **关闭 Task 6**：记录锁定 sha、下载主机、自检耗时和已知限制，复跑测试/构建后独立提交。
+1. 用真实 `model.generate()` 替换当前桩生成，接入 `TextStreamer` 与 chat template。
+2. 同时记录 Worker TTFT、用户感知 TTFT 和精确 token 数，返回可复核的 `GenStats`。
+3. 将 `ThinkFilter` 接到增量回调，确保 `<think>` 不会在流式 UI 中闪现。
+4. 复跑单测/构建，并用固定输入完成 Chrome 真机流式验收后独立提交。
 
 ---
 
@@ -80,7 +81,7 @@ Task 5 与 WXT 0.20 基线已关闭，后续保持 Task 6 → 10 串行推进。
 - **量化**：WebGPU `dtype: 'q4f16'`；WASM `dtype: 'q8'`（🔬 待实测，可调）。
 - **关闭思考**：`apply_chat_template({ enable_thinking: false })` + **流式增量** `ThinkFilter`（不是生成后一次性 strip），保证 `<think>` 即便意外出现也不会闪现给用户。
 - **后端选择红线**：WebGPU 初始化失败或自检失败 **绝不自动回退 WASM**；只有用户显式选择才走 WASM。切换/失败/取消前必须 `disposeLoaded()` 释放上一个模型（GPU session/显存）。
-- **无远程代码 & Worker 纯净**：所有 JS/WASM 本地打包；ORT 的 `.wasm` 来自扩展内本地资产（禁 CDN fetch），其基址由 Side Panel 经 `InitConfig.ortBaseUrl` 传入 Worker；Worker 内不调用 `chrome.*`。仅模型权重/tokenizer/config 作数据远程下载。
+- **无远程代码 & Worker 纯净**：所有 JS/WASM 本地打包；ORT 的 `.mjs/.wasm` 由 Worker 通过 Vite `?url` 在构建时纳入扩展（禁 CDN fetch）；Worker 内不调用 `chrome.*`。仅模型权重/tokenizer/config 作数据远程下载。
 - **CSP**：`extension_pages` 只放 `'wasm-unsafe-eval'`（不放 `'unsafe-eval'`）；`connect-src` 只放行模型下载 + revision 查询主机（🔬 确切主机名首次下载时用 DevTools Network 核对回填）。
 - **性能对标（设计文档 §6，实测回填、不得只取最好结果）**：用户感知 TTFT ≤ 4s（固定 fixture）；生成 ≥ 5 tokens/s（**精确** token 计数）；停止 500ms 停字 / 1s 结束；连跑 10 次无崩溃。判定标准见 §7。
 - **Git**：本项目提交**不加 `Co-Authored-By` 尾行**，作者为仓库配置的 `Mr-CG-end`；频繁小步提交。
@@ -90,8 +91,6 @@ Task 5 与 WXT 0.20 基线已关闭，后续保持 Task 6 → 10 串行推进。
 ```text
 wisp/
 ├─ package.json / tsconfig.json / wxt.config.ts / vitest.config.ts / .gitignore   # Task 1
-├─ scripts/copy-ort.mjs                 # 受版本控制的 ORT 资产拷贝脚本（Task 9）
-├─ public/ort/                          # 本地打包的 ONNX Runtime .wasm/.mjs（Task 9，由脚本生成）
 ├─ entrypoints/
 │  ├─ background.ts                     # SW：点击图标开侧边栏（Task 1）
 │  └─ sidepanel/
@@ -150,6 +149,7 @@ export interface LoadProgress {
   file: string;            // 最近更新的文件名（诊断用）
   loaded: number;          // 已知文件累计已下载字节（总体，见 Task 6 聚合）
   total: number;           // 已知文件累计总字节（随发现新文件而增长）
+  pct: number;             // 单调显示进度；模型自检通过后才为 100
 }
 
 export interface InitConfig {
@@ -157,7 +157,6 @@ export interface InitConfig {
   revision: string;        // 必须是下载前锁定的确切 commit sha（见 Task 6）
   quant: { webgpu: 'q4f16'; wasm: 'q8' };
   backend?: 'webgpu' | 'wasm';
-  ortBaseUrl: string;      // 由 Side Panel 传入（chrome.runtime.getURL('ort/')）；Worker 不碰 chrome.*
 }
 export interface InitResult { backend: 'webgpu' | 'wasm'; ready: boolean; selfCheckMs: number; }
 
@@ -185,7 +184,7 @@ export interface InferenceApi {
 }
 ```
 
-> **契约变更（已同步设计文档 §2.3）**：① 移除 `init(..., signal?: AbortSignal)` —— `AbortSignal` 跨 Comlink 无法把 abort 同步进 Worker 的 fetch；**下载取消改由 Panel 终止并重建 Worker**（Task 8）。② 新增 `dispose()`。③ `InitConfig` 新增 `ortBaseUrl`（点 9：Worker 不碰 `chrome.*`）。④ `revision` 语义收紧为"下载前锁定的 sha"。
+> **契约变更（已同步设计文档 §2.3）**：① 移除 `init(..., signal?: AbortSignal)` —— `AbortSignal` 跨 Comlink 无法把 abort 同步进 Worker 的 fetch；**下载取消改由 Panel 终止并重建 Worker**（Task 8）。② 新增 `dispose()`。③ `revision` 语义收紧为"下载前锁定的 sha"。ORT 资源由 Worker 构建时本地导入，不进入跨线程契约。
 
 `chatTemplate.ts`（同前，保留最终兜底 `stripThinking`）：
 
@@ -396,7 +395,7 @@ export function useInference() {
 ### Task 6: Worker 真实加载 Qwen3-0.6B + **下载前锁定 revision** + 自检 + **dispose** + **进度聚合**
 
 **Files**：Modify `inference.worker.ts` / `App.tsx`
-**产出**：Worker `init(cfg,onProgress)` 用 Transformers.js 加载（`device` 与 `dtype` 来自 cfg），做最小自检生成，返回 `InitResult`；`disposeLoaded()` 统一释放；进度聚合为总体进度。ORT 基址取自 `cfg.ortBaseUrl`（Task 9 起用）。
+**产出**：Worker `init(cfg,onProgress)` 用 Transformers.js 加载（`device` 与 `dtype` 来自 cfg），做最小自检生成，返回 `InitResult`；`disposeLoaded()` 统一释放；进度聚合为总体进度。ORT `.mjs/.wasm` 通过 Vite `?url` 作为扩展本地资源加载。
 
 **Step 0 · 下载前锁定 revision（点：一致性）**：先取模型仓库当前 commit sha 并写入常量，再下载。避免"跑通后才改 sha"引起缓存键变化重下。
 
@@ -412,10 +411,13 @@ Worker（装配 + dispose + 进度聚合 + init）：
 import * as Comlink from 'comlink';
 import { AutoModelForCausalLM, AutoTokenizer, env,
   type PreTrainedModel, type PreTrainedTokenizer } from '@huggingface/transformers';
+import ortWasmModuleUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs?url';
+import ortWasmBinaryUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm?url';
 import type { InferenceApi, InitConfig, InitResult, LoadProgress } from '../../core/inference/contract';
 
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
+env.backends.onnx.wasm!.wasmPaths = { mjs: ortWasmModuleUrl, wasm: ortWasmBinaryUrl };
 
 let model: PreTrainedModel | null = null;
 let tokenizer: PreTrainedTokenizer | null = null;
@@ -440,8 +442,6 @@ async function init(cfg: InitConfig, onProgress: (p: LoadProgress) => void): Pro
   await disposeLoaded();                                   // 新一次 init 前先释放（点 5）
   const backend = cfg.backend ?? 'webgpu';
   const dtype = backend === 'webgpu' ? cfg.quant.webgpu : cfg.quant.wasm;
-  // ORT 本地资产基址（点 9：不碰 chrome.*），Task 9 起生效
-  env.backends.onnx.wasm.wasmPaths = cfg.ortBaseUrl;
   const pc = makeProgress(onProgress);
   try {
     tokenizer = await AutoTokenizer.from_pretrained(cfg.modelId, { revision: cfg.revision, progress_callback: pc });
@@ -467,17 +467,16 @@ Comlink.expose(api);
 
 > 首次跑通后：把 DevTools Network 命中的下载主机名回填 `wxt.config.ts` 的 `connect-src`。
 
-Panel（状态机驱动 + 传 ortBaseUrl；核心片段）：
+Panel（状态机驱动；核心片段）：
 
 ```tsx
 const MODEL_ID = 'onnx-community/Qwen3-0.6B-ONNX';
 const REVISION = '<锁定的 commit sha>';                 // Step 0 回填
-const ORT_BASE = chrome.runtime.getURL('ort/');        // Panel 侧取 URL，传给 Worker（点 9）
 
 async function runInit(backend: 'webgpu' | 'wasm') {
   try {
     await getApi().init(
-      { modelId: MODEL_ID, revision: REVISION, quant: { webgpu: 'q4f16', wasm: 'q8' }, backend, ortBaseUrl: ORT_BASE },
+      { modelId: MODEL_ID, revision: REVISION, quant: { webgpu: 'q4f16', wasm: 'q8' }, backend },
       Comlink.proxy((p: LoadProgress) => setPct(p.total ? Math.round((p.loaded / p.total) * 100) : 0)),
     );
     dispatch({ t: 'init-ok' }); dispatch({ t: 'self-check-ok' });   // init 内含自检
@@ -486,7 +485,7 @@ async function runInit(backend: 'webgpu' | 'wasm') {
 // load('auto')：dispatch start(webgpuAvailable:'gpu' in navigator)；needs-user-choice 时显示「用 WASM 兼容模式」按钮
 ```
 
-- [ ] Step 0 锁定 sha → 写代码 →（联网）`npm run dev`：「加载模型」→ 进度**单调**递增 → `ready（webgpu）`；Network 记录下载主机回填 CSP；无 WebGPU 机器见 `needs-user-choice`（不自动降级）→ 提交 `feat: 加载 Qwen3-0.6B(WebGPU q4f16)，锁定revision/自检/dispose/进度聚合`
+- [x] Step 0 锁定 sha → 写代码 →（联网）`npm run build:dev` 后重载扩展：「加载模型」→ 进度**单调**递增 → `ready（webgpu）`；自检 2520ms；Network 记录下载主机并回填 CSP；无自动 WASM 降级。WXT 实时服务仅用于无 Worker 的 UI 热更新。
 
 ### Task 7: 流式生成 + **精确 token 计数** + **双口径 TTFT** + **流式思考过滤**
 
@@ -594,41 +593,23 @@ async function clearModelCache(modelId: string, revision: string) {
 
 - [ ] 写代码 → `npm run dev`：① 生成途中「停止」→ 约 1s 内停住（记录实际停字/结束耗时）；② 首次下载途中「取消下载」→ 网络请求随 Worker 终止而中断、缓存被清、状态回可重试、**再次加载会重新下载**（证明不是伪完成）；记录原生 fetch 中止可行性 → 提交 `feat: 生成中断 + 下载取消(终止Worker可靠中止+清缓存)`
 
-### Task 9: ORT WASM 本地打包（脚本化）+ **显式尝试跨源隔离** + WASM 后端可用
+### Task 9: ORT WASM 隔离探测 + WASM 后端可用
 
-**Files**：Create `scripts/copy-ort.mjs`、`public/ort/*`（脚本生成）；Modify `wxt.config.ts`（尝试 COOP/COEP）、`inference.worker.ts`（探测/退化）
-**产出**：ORT `.wasm` 本地打包且经 `InitConfig.ortBaseUrl` 使用；**显式尝试为扩展页开启跨源隔离**并如实记录 `crossOriginIsolated`；WASM(q8) 后端可加载生成。
-
-`scripts/copy-ort.mjs`（点 8：不 resolve 未导出的 package.json）：
-
-```js
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
-import { mkdirSync, readdirSync, copyFileSync } from 'node:fs';
-
-const require = createRequire(import.meta.url);
-const distDir = dirname(require.resolve('onnxruntime-web'));   // main → dist/；避开 ./package.json 子路径
-const out = 'public/ort';
-mkdirSync(out, { recursive: true });
-const copied = readdirSync(distDir).filter(f => /\.(wasm|mjs)$/.test(f));
-for (const f of copied) copyFileSync(join(distDir, f), join(out, f));
-console.log('copied ORT assets:', copied);
-```
-
-加 `package.json` 脚本：`"copy-ort": "node scripts/copy-ort.mjs"`，并在 `postinstall`/`build` 前执行一次。
+**Files**：Modify `wxt.config.ts`（尝试 COOP/COEP）、`inference.worker.ts`（探测/退化）
+**产出**：复用 Task 6 已通过 Vite `?url` 本地打包的 ORT `.mjs/.wasm`；**显式尝试为扩展页开启跨源隔离**并如实记录 `crossOriginIsolated`；WASM(q8) 后端可加载生成。
 
 `wxt.config.ts` 尝试为扩展页开启跨源隔离（点 6，MV3 可配性本就是 🔬）：
 - 尝试可用手段（如 side panel / 扩展页响应头 `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` 的可配置性），并**如实记录是否使 `self.crossOriginIsolated === true`**。
 - **预期结论**：MV3 扩展页很可能无法可靠开启跨源隔离；若为 `false`，ORT 退化单线程，记录单线程 tokens/s（对照 §6，不虚标）。
 
-Worker（探测 + 退化；`wasmPaths` 已由 Task 6 的 `cfg.ortBaseUrl` 设置）：
+Worker（探测 + 退化；`wasmPaths` 已由 Task 6 设置为构建产物内的本地 URL）：
 
 ```ts
 env.backends.onnx.wasm.numThreads = self.crossOriginIsolated ? undefined : 1;   // 退化单线程
 console.log('[wisp] crossOriginIsolated=', self.crossOriginIsolated, 'SAB=', typeof SharedArrayBuffer !== 'undefined');
 ```
 
-- [ ] 写脚本/配置 → `npm run copy-ort` → `npm run build` 核对 `.output/chrome-mv3/ort/` 含 `.wasm` → `npm run dev` 走 WASM 路径到 `ready（wasm）`能生成、Network 确认 ORT wasm 来自 `chrome-extension://…/ort/`（非 CDN）、**记录 `crossOriginIsolated` 实际值与是否单线程** → 提交 `feat: ORT本地打包(脚本化)+尝试跨源隔离+WASM后端可用`
+- [ ] 配置/探测 → `npm run build:dev` 核对构建产物含本地 ORT `.mjs/.wasm` → 重载扩展后走 WASM 路径到 `ready（wasm）` 能生成、Network 确认 ORT 来自 `chrome-extension://…/assets/`（非 CDN）、**记录 `crossOriginIsolated` 实际值与是否单线程** → 提交 `feat: 尝试跨源隔离并验证 WASM 后端`
 
 ### Task 10: 固定基准 fixture + 可复现协议 + 扩展实测指标 + 回填 §10/README
 
@@ -710,8 +691,8 @@ export const BENCH_TEXT_HASH = hashText(BENCH_TEXT);   // 首次写定后固化�
 ## 6. 端到端验证（整套 Spike 验收）
 
 1. `npm test` → 纯逻辑模块（chatTemplate / thinkFilter / cancellation / backend / bench-fixture）全绿。
-2. `npm run copy-ort && npm run build` → `.output/chrome-mv3/` 生成，`ort/` 下有本地 `.wasm`。
-3. `npm run dev` 载入 Chrome：加载到 `ready（webgpu）`（无 WebGPU 见 `needs-user-choice`，非自动降级）；用 fixture 生成、流式、**无 `<think>`**、显示 感知/Worker TTFT + 精确 tok/s；生成途中「停止」≤ ~1s；「取消下载」终止在途下载并清缓存；Offline 后二次加载离线完成一次摘要；按协议连跑无崩溃。
+2. `npm run build` → `.output/chrome-mv3/` 生成，`assets/` 下有本地 ORT `.mjs/.wasm`。
+3. `npm run build:dev` 后重载 Chrome 扩展：加载到 `ready（webgpu）`（无 WebGPU 见 `needs-user-choice`，非自动降级）；用 fixture 生成、流式、**无 `<think>`**、显示 感知/Worker TTFT + 精确 tok/s；生成途中「停止」≤ ~1s；「取消下载」终止在途下载并清缓存；Offline 后二次加载离线完成一次摘要；按协议连跑无崩溃。
 4. 可复现实测数据回填 README + 设计文档 §10/§6，按 §7 给出阶段门判定。
 
 ## 7. 阶段门判定标准（通过 / 条件通过 / 失败）
@@ -724,4 +705,4 @@ export const BENCH_TEXT_HASH = hashText(BENCH_TEXT);   // 首次写定后固化�
 
 ## 8. 执行方式
 
-按任务顺序逐个执行：纯逻辑任务（2/3/4/10-fixture）走 TDD 并可完全自动化验证（`npm test`）；浏览器运行时任务（5~10）写代码后需在本机 `npm run dev` 载入扩展手动实测（涉及 WebGPU、模型下载、离线缓存、跨源隔离，无法在无头环境代跑）。每个任务末尾独立提交，提交不加署名尾行。
+按任务顺序逐个执行：纯逻辑任务（2/3/4/10-fixture）走 TDD 并可完全自动化验证（`npm test`）；浏览器运行时任务（5~10）写代码后需在本机手动实测。无 Worker 的 UI 可用 `npm run dev` 热更新；模型 Worker 验收使用 `npm run build:dev` 后重载扩展（MV3 不允许 localhost 跨来源 Worker）。每个任务末尾独立提交，提交不加署名尾行。

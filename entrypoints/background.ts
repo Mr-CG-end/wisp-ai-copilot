@@ -1,5 +1,7 @@
 export default defineBackground(() => {
-  chrome.sidePanel
-    ?.setPanelBehavior({ openPanelOnActionClick: true })
-    .catch((e) => console.error('setPanelBehavior', e));
+  chrome.action.onClicked.addListener((tab) => {
+    chrome.sidePanel
+      .open({ windowId: tab.windowId })
+      .catch((error) => console.error('openSidePanel', error));
+  });
 });

@@ -5,6 +5,7 @@
   "version": "0.0.1",
   "scripts": {
     "dev": "wxt",
+    "build:dev": "wxt build --mode development",
     "build": "wxt build",
     "test": "vitest run",
     "postinstall": "wxt prepare"

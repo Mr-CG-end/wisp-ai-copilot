@@ -279,7 +279,6 @@ interface InitConfig {
   revision: string;                          // 必须是「下载前」锁定的确切 commit sha，避免改 sha 变缓存键重下
   quant: { webgpu: 'q4f16'; wasm: 'q8' };   // 分后端量化；wasm 具体格式待实测 🔬
   backend?: 'webgpu' | 'wasm';               // 缺省先试 webgpu
-  ortBaseUrl: string;                        // ORT 本地资产基址，由 Side Panel 经 chrome.runtime.getURL 传入；Worker 不碰 chrome.*
 }
 interface InitResult { backend: 'webgpu' | 'wasm'; ready: boolean; selfCheckMs: number; }
 

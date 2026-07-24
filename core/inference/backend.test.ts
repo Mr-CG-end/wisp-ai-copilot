@@ -49,4 +49,8 @@ describe('backend reduce', () => {
       run([{ t: 'start', requested: 'wasm', webgpuAvailable: false }, { t: 'init-fail', reason: 'x' }]).status,
     ).toBe('error');
   });
+
+  it('重建 Worker 后重置为 idle', () => {
+    expect(reduce({ status: 'ready', backend: 'webgpu' }, { t: 'reset' })).toEqual({ status: 'idle' });
+  });
 });
