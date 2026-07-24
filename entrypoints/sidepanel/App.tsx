@@ -1,21 +1,29 @@
 import { useReducer, useState } from 'react';
 import * as Comlink from 'comlink';
 import { useInference } from './useInference';
-import type { GenStats, LoadProgress, InitResult } from '../../core/inference/contract';
+import type { GenerateRequest, GenStats, Lang, LoadProgress, InitResult } from '../../core/inference/contract';
 import { reduce } from '../../core/inference/backend';
 
 const MODEL_ID = 'onnx-community/Qwen3-0.6B-ONNX';
 const REVISION = 'da1453100cf3ff33ef56d17983fc7a8648706db6';
 const WORKER_UNAVAILABLE = import.meta.env.COMMAND === 'serve';
 
+const DEFAULT_TEXT =
+  '人工智能正在改变我们生活与工作的方方面面。特别是在前端与边缘计算领域，WebGPU 和 WASM 技术使得在浏览器本地运行小参数语言模型成为可能。';
+
 export function App() {
   const { getApi, recreate } = useInference();
   const [initState, dispatch] = useReducer(reduce, { status: 'idle' });
+  const [inputText, setInputText] = useState(DEFAULT_TEXT);
+  const [userInput, setUserInput] = useState('');
+  const [taskType, setTaskType] = useState<GenerateRequest['taskType']>('summary');
+  const [targetLang, setTargetLang] = useState<Exclude<Lang, 'other'>>('en');
   const [output, setOutput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [initResult, setInitResult] = useState<InitResult | null>(null);
   const [progressPct, setProgressPct] = useState<number>(0);
   const [stats, setStats] = useState<GenStats | null>(null);
+  const [perceivedTtft, setPerceivedTtft] = useState<number | null>(null);
 
   const runInit = async (backend: 'webgpu' | 'wasm') => {
     setProgressPct(0);
@@ -61,24 +69,39 @@ export function App() {
     setProgressPct(0);
     setOutput('');
     setStats(null);
+    setPerceivedTtft(null);
   };
 
   const handleGenerate = async () => {
     setOutput('');
     setStats(null);
+    setPerceivedTtft(null);
     setIsGenerating(true);
+
+    const clickAt = performance.now();
+    let firstTokenReceived = false;
 
     try {
       const api = await getApi();
       const resStats = await api.generate(
         {
-          taskType: 'qa',
-          untrustedData: '测试数据',
-          params: { maxNewTokens: 100, temperature: 0.7 },
+          taskType,
+          untrustedData: inputText,
+          userInput: taskType === 'qa' ? userInput || undefined : undefined,
+          targetLang: taskType === 'translate' ? targetLang : undefined,
+          params: { maxNewTokens: 256, temperature: 0 },
         },
         crypto.randomUUID(),
         Comlink.proxy((delta: string) => {
           setOutput((prev) => prev + delta);
+          if (!firstTokenReceived) {
+            firstTokenReceived = true;
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                setPerceivedTtft(Math.round(performance.now() - clickAt));
+              });
+            });
+          }
         })
       );
       setStats(resStats);
@@ -94,7 +117,7 @@ export function App() {
 
   return (
     <main style={{ padding: 16, fontFamily: 'system-ui' }}>
-      <h2>Wisp Spike (Task 6)</h2>
+      <h2>Wisp Spike (Task 7)</h2>
       {WORKER_UNAVAILABLE && (
         <div style={{ color: '#8a4b08', marginBottom: 12 }}>
           WXT 实时开发模式不支持扩展 Worker。请运行 npm run build:dev 后重新加载扩展。
@@ -133,8 +156,59 @@ export function App() {
       )}
 
       <div style={{ marginBottom: 12 }}>
+        <label style={{ display: 'block', fontWeight: 'bold', marginBottom: 4 }}>任务类型：</label>
+        <select
+          value={taskType}
+          onChange={(e) => setTaskType(e.target.value as GenerateRequest['taskType'])}
+          disabled={!isReady || isGenerating}
+          style={{ marginBottom: 8, padding: '4px 8px' }}
+        >
+          <option value="summary">总结 (summary)</option>
+          <option value="qa">问答 (qa)</option>
+          <option value="explain">解释 (explain)</option>
+          <option value="translate">翻译 (translate)</option>
+        </select>
+
+        <label style={{ display: 'block', fontWeight: 'bold', marginBottom: 4 }}>待处理文本 (material)：</label>
+        <textarea
+          rows={3}
+          value={inputText}
+          onChange={(e) => setInputText(e.target.value)}
+          disabled={!isReady || isGenerating}
+          style={{ width: '100%', boxSizing: 'border-box', marginBottom: 8 }}
+        />
+
+        {taskType === 'qa' && (
+          <>
+            <label style={{ display: 'block', fontWeight: 'bold', marginBottom: 4 }}>用户提问：</label>
+            <input
+              type="text"
+              value={userInput}
+              onChange={(e) => setUserInput(e.target.value)}
+              disabled={!isReady || isGenerating}
+              style={{ width: '100%', boxSizing: 'border-box', marginBottom: 8 }}
+              placeholder="请输入提问..."
+            />
+          </>
+        )}
+
+        {taskType === 'translate' && (
+          <>
+            <label style={{ display: 'block', fontWeight: 'bold', marginBottom: 4 }}>目标语言：</label>
+            <select
+              value={targetLang}
+              onChange={(e) => setTargetLang(e.target.value as Exclude<Lang, 'other'>)}
+              disabled={!isReady || isGenerating}
+              style={{ marginBottom: 8, padding: '4px 8px' }}
+            >
+              <option value="zh">中文</option>
+              <option value="en">英文</option>
+            </select>
+          </>
+        )}
+
         <button onClick={handleGenerate} disabled={!isReady || isGenerating || isInitializing}>
-          {isGenerating ? '生成中...' : '桩生成回归（非真实模型输出）'}
+          {isGenerating ? '流式生成中...' : '流式生成'}
         </button>
       </div>
 
@@ -154,9 +228,17 @@ export function App() {
         </pre>
       </div>
       {stats && (
-        <div style={{ marginTop: 12, fontSize: 12, color: '#666' }}>
-          <p>
-            TTFT: {stats.ttftMs}ms | 速度: {stats.tokensPerSec} tokens/s | 标记数: {stats.tokens}
+        <div style={{ marginTop: 12, padding: 8, background: '#f0f0f0', borderRadius: 4, fontSize: 12, color: '#333' }}>
+          <p style={{ margin: '2px 0' }}>
+            <strong>用户感知 TTFT:</strong> {perceivedTtft ?? '-'}ms | <strong>Worker TTFT:</strong>{' '}
+            {Math.round(stats.ttftMs)}ms
+          </p>
+          <p style={{ margin: '2px 0' }}>
+            <strong>生成速度:</strong> {stats.tokensPerSec.toFixed(1)} tokens/s | <strong>Token 数量:</strong>{' '}
+            {stats.tokens}
+          </p>
+          <p style={{ margin: '2px 0' }}>
+            <strong>后端:</strong> {stats.backend} | <strong>截断:</strong> {stats.truncated ? '是' : '否'}
           </p>
         </div>
       )}

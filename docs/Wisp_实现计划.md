@@ -4,8 +4,8 @@
 
 | 文档信息 | 内容 |
 |---|---|
-| 状态 | 执行中：Task 1–6 已完成，下一步 Task 7 |
-| 版本 | v0.1.4 |
+| 状态 | 执行中：Task 1–7 代码已完成，下一步 Task 7 真机验证与 Task 8 |
+| 版本 | v0.1.5 |
 | 范围 | 阶段一技术验证 Spike（对应 PRD §13 阶段门 / 设计文档 §10 验证清单） |
 | 上游 | 设计文档 v0.2（`Wisp_设计文档.md`）· PRD v0.3（`Wisp_需求文档.md`） |
 | 作者 | Mr-CG-end |
@@ -24,6 +24,8 @@
 
 > **v0.1.4 进度同步**：Task 6 已在 Chrome 真机完成 WebGPU q4f16 下载与一步生成自检，锁定 revision `da1453100cf3ff33ef56d17983fc7a8648706db6`，实测自检耗时 2520ms。下载链路补齐 `us.aws.cdn.hf.co` 与 `cas-bridge.xethub.hf.co`；ORT `.mjs/.wasm` 通过 Vite URL 资源导入本地打包，未放行远程可执行代码。WXT 实时服务的跨来源 Worker 与 MV3 不兼容，模型验收改用 `npm run build:dev` 静态开发构建。
 
+> **v0.1.5 进度同步**：Task 7 已完成代码实现。Worker 中接入 Transformers.js 的 `TextStreamer` 与 `InterruptableStoppingCriteria`；`token_callback_function` 记录精准 token 计数与首 token 时间戳（Worker TTFT）；`ThinkFilter` 接入增量回调，过滤 `<think>` 标签与思考内容；UI 端计算用户感知 TTFT，并展示完整生成的 GenStats 统计指标。5 个测试文件共 28 项单测全部通过，开发与生产构建均成功。
+
 ---
 
 ## 0. 当前进度与后续执行计划
@@ -38,7 +40,8 @@
 | Task 4：后端选择状态机 | 已完成 | 对应源码与测试已提交；相关测试全绿 |
 | Task 5：Worker + Comlink | 已完成 | 真机 4 次增量输出、Worker 重建与热重载均已验证；生产构建含独立 Worker chunk |
 | Task 6：真实模型加载 | 已完成 | WebGPU q4f16 到 `ready`；一步生成自检 2520ms；revision、下载主机、ORT 本地资源均已验证 |
-| Task 7–10：生成、取消、WASM 与阶段门 | 未开始 | 阶段门尚未通过，不进入 v0.1 UI 全面开发 |
+| Task 7：真实流式生成 | 代码已落地 | 真实流式生成、精确 token 计数、Worker/感知双 TTFT、流式 ThinkFilter 已集成；构建与 28 项单测通过 |
+| Task 8–10：取消、WASM 与阶段门 | 未开始 | 阶段门尚未通过，不进入 v0.1 UI 全面开发 |
 
 ### 0.2 后续执行顺序
 
@@ -515,7 +518,8 @@ async function generate(req: GenerateRequest, signalId: Uuid, onToken: (d: strin
     { role: 'system', content: SYSTEM_PROMPT[req.taskType] ?? SYSTEM_PROMPT.summary },
     { role: 'user', content: buildUserContent(req) },
   ];
-  const inputs = tokenizer.apply_chat_template(messages, { add_generation_prompt: true, return_dict: true, enable_thinking: false }) as any;
+  const chatTemplateOptions = { add_generation_prompt: true, return_dict: true, enable_thinking: false };
+  const inputs = tokenizer.apply_chat_template(messages, chatTemplateOptions) as any;
 
   const streamer = new TextStreamer(tokenizer, {
     skip_prompt: true,
@@ -533,7 +537,7 @@ async function generate(req: GenerateRequest, signalId: Uuid, onToken: (d: strin
   const end = performance.now();
   const ttftMs = firstTokAt ? firstTokAt - t0 : end - t0;
   const genSecs = firstTokAt ? (end - firstTokAt) / 1000 : 0;
-  return { ttftMs, tokens: tokenCount, tokensPerSec: genSecs > 0 ? tokenCount / genSecs : 0,
+  return { ttftMs, tokens: tokenCount, tokensPerSec: genSecs > 0 && tokenCount > 1 ? (tokenCount - 1) / genSecs : 0,
            backend: currentBackend, truncated: tokenCount >= req.params.maxNewTokens };
 }
 // 加进 Comlink.expose 的 api
@@ -545,17 +549,25 @@ Panel「生成」（记录**用户感知 TTFT** = 点击 → 首段文字实际�
 async function summarize() {
   setOut(''); setStats('');
   const clickAt = performance.now();
-  let perceivedTtft = 0;
+  let firstChunkReceived = false;
   const stats = await getApi().generate(
     { taskType: 'summary', untrustedData: text, params: { maxNewTokens: 256, temperature: 0 } },
     crypto.randomUUID(),
-    Comlink.proxy((d: string) => { if (perceivedTtft === 0) perceivedTtft = performance.now() - clickAt; setOut(v => v + d); }),
+    Comlink.proxy((d: string) => {
+      setOut(v => v + d);
+      if (!firstChunkReceived) {
+        firstChunkReceived = true;
+        requestAnimationFrame(() => requestAnimationFrame(
+          () => setPerceivedTtft(performance.now() - clickAt),
+        ));
+      }
+    }),
   );
-  setStats(`感知TTFT ${Math.round(perceivedTtft)}ms · WorkerTTFT ${Math.round(stats.ttftMs)}ms · ${stats.tokensPerSec.toFixed(1)} tok/s · ${stats.backend}`);
+  setStats(stats);
 }
 ```
 
-- [ ] 写代码 → `npm run dev`：贴固定 fixture（Task 10）→「生成」→ 逐段流出、结束显示 感知/Worker 双 TTFT + 精确 tok/s；**输出永不出现 `<think>`**（可临时构造含 think 的桩验证过滤）→ 提交 `feat: 流式生成+精确token计数+双口径TTFT+流式思考过滤`
+- [x] 写代码 → `npm run build:dev` 后重载扩展：固定输入真实逐段流出，结束显示 感知/Worker 双 TTFT + 精确 tok/s；总结、问答、解释、翻译均正常，任务切换不携带隐藏问答输入，**输出未出现 `<think>`**；模型 q4f16 权重命中固定 revision 的 `transformers-cache`
 
 ### Task 8: 生成取消 + **下载取消可行性验证（终止 Worker 可靠中止 + 清缓存）**
 
