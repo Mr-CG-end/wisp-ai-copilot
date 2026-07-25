@@ -57,9 +57,7 @@ export function usePageChannel() {
 
   /**
    * 用户显式「在本页启用 Wisp」：注入 CS 并建立 Port。
-   * 返回新的 TaskContext 而不是 boolean —— 调用方紧接着要 readPage()，
-   * 此时 setBoundCtx 还没被 React 提交，闭包里的 boundCtx 仍是旧值（null）。
-   * 把 ctx 沿调用链显式传下去，不依赖刚 set 的 state。
+   * 返回新的 TaskContext 而不是 boolean。
    */
   const bindActiveTab = useCallback(async (): Promise<TaskContext | null> => {
     setLastError(null);
@@ -111,7 +109,7 @@ export function usePageChannel() {
     const ctx: TaskContext = { tabId: info.tabId, url: '', epoch: ensured.epoch };
     setActiveTab(info);
     setBoundCtx(ctx);
-    boundCtxRef.current = ctx;        // 供本轮同步链路使用，不等 React 提交
+    boundCtxRef.current = ctx;
     return ctx;
   }, [closePort]);
 
@@ -152,6 +150,108 @@ export function usePageChannel() {
     [request],
   );
 
+  /**
+   * 候选页面事务式读取：
+   * 成功后提交新 Port 与 boundCtx，失败时不影响已有绑定与页面快照。
+   */
+  const readActivePage = useCallback(async (): Promise<{
+    ctx: TaskContext;
+    title: string;
+    text: string;
+    charCount: number;
+    truncated: boolean;
+    method: 'readability' | 'heuristic';
+  } | null> => {
+    setLastError(null);
+    const info: ActiveTabInfo | null = await chrome.runtime.sendMessage({ type: 'REQUEST_ACTIVE_TAB' });
+    if (!info) {
+      setLastError({ code: 'PAGE_INJECTION_BLOCKED', message: '没有可用的活动标签页' });
+      return null;
+    }
+    const ensured: EnsureContentScriptResult = await chrome.runtime.sendMessage({
+      type: 'ENSURE_CONTENT_SCRIPT',
+      tabId: info.tabId,
+    });
+    if (!ensured.ok) {
+      const message =
+        ensured.code === 'PAGE_PERMISSION_REQUIRED'
+          ? '尚未授权当前标签页。请在这个页面点击工具栏 Wisp 图标，然后重新读取。'
+          : ensured.code === 'TAB_CHANGED'
+            ? '当前标签页已切换或关闭，请重新读取。'
+            : '浏览器不允许扩展读取此页面，请换一个普通网页。';
+      setLastError({ code: ensured.code, message });
+      return null;
+    }
+
+    let candidatePort: chrome.runtime.Port | null = null;
+    try {
+      candidatePort = chrome.tabs.connect(info.tabId, { name: PORT_NAME });
+    } catch {
+      setLastError({ code: 'PAGE_INJECTION_BLOCKED', message: '连接候选页面失败' });
+      return null;
+    }
+
+    const candidateSlot = new RequestSlot<ContentToPanel>();
+    candidatePort.onMessage.addListener((msg: ContentToPanel) => {
+      candidateSlot.resolve(msg);
+    });
+
+    try {
+      const responsePromise = candidateSlot.start(8000);
+      candidatePort.postMessage({ type: 'EXTRACT', reason: 'initial', epoch: ensured.epoch });
+      const reply = await responsePromise;
+
+      if (reply.type === 'ERROR') {
+        setLastError({ code: reply.code, message: reply.message });
+        candidatePort.disconnect();
+        return null;
+      }
+      if (reply.type !== 'EXTRACTED') {
+        candidatePort.disconnect();
+        return null;
+      }
+
+      // 提取成功！事务提交
+      closePort();
+
+      const nextCtx: TaskContext = { ...reply.ctx, tabId: info.tabId };
+      candidatePort.onMessage.addListener((msg: ContentToPanel) => {
+        if (msg.type === 'PAGE_UNLOADING' || msg.type === 'PAGE_NAVIGATED') {
+          boundCtxRef.current = null;
+          requestSlotRef.current.cancel('PAGE_CHANGED');
+          setBoundCtx(null);
+          setLastError({ code: 'TAB_CHANGED', message: '页面已跳转，旧任务已作废，可重新读取本页' });
+          return;
+        }
+        requestSlotRef.current.resolve(msg);
+      });
+      candidatePort.onDisconnect.addListener(() => {
+        if (portRef.current !== candidatePort) return;
+        portRef.current = null;
+        boundCtxRef.current = null;
+        requestSlotRef.current.cancel('PORT_CLOSED');
+        setBoundCtx(null);
+      });
+
+      portRef.current = candidatePort;
+      setBoundCtx(nextCtx);
+      boundCtxRef.current = nextCtx;
+
+      return {
+        ctx: nextCtx,
+        title: reply.title,
+        text: reply.text,
+        charCount: reply.charCount,
+        truncated: reply.truncated,
+        method: reply.method,
+      };
+    } catch {
+      candidatePort.disconnect();
+      setLastError({ code: 'PAGE_INJECTION_BLOCKED', message: '提取候选页面正文超时或失败' });
+      return null;
+    }
+  }, [closePort]);
+
   const requestSelection = useCallback(
     async (ctx?: TaskContext) => {
       const bound = ctx ?? boundCtxRef.current;
@@ -162,5 +262,5 @@ export function usePageChannel() {
     [request],
   );
 
-  return { activeTab, boundCtx, bindActiveTab, readPage, requestSelection, lastError, setLastError };
+  return { activeTab, boundCtx, bindActiveTab, readPage, readActivePage, requestSelection, lastError, setLastError };
 }
