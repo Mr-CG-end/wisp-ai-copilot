@@ -46,6 +46,7 @@ export function App() {
   const [pageInfo, setPageInfo] = useState<string>('');
 
   const handleReadPage = async () => {
+    setPageInfo('');
     const ctx = await page.bindActiveTab();
     if (!ctx) return;
     const extracted = await page.readPage('initial', ctx);

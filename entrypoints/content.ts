@@ -1,6 +1,11 @@
 import { extractArticle } from '../core/extract/article';
 import { truncateForContext } from '../core/extract/truncate';
-import { PORT_NAME, type ContentToPanel, type PanelToContent } from '../core/messaging/types';
+import {
+  PORT_NAME,
+  type ContentToBackground,
+  type ContentToPanel,
+  type PanelToContent,
+} from '../core/messaging/types';
 
 /** 去掉 hash 的规范化 URL：SPA 的锚点跳转不算换页，不应作废在途任务。 */
 function normalizedUrl(): string {
@@ -45,6 +50,8 @@ export default defineContentScript({
         if (next === lastUrl) return;          // 纯 hash 变化不算换页
         lastUrl = next;
         send({ type: 'PAGE_NAVIGATED', url: location.href });
+        const backgroundMessage: ContentToBackground = { type: 'PAGE_NAVIGATED', url: location.href };
+        void chrome.runtime.sendMessage(backgroundMessage).catch(() => undefined);
       };
       const nav = (window as unknown as { navigation?: EventTarget }).navigation;
       nav?.addEventListener('navigatesuccess', onNavigated);

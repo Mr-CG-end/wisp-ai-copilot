@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { RequestSlot } from '../../core/messaging/requestSlot';
 import type {
   ActiveTabInfo,
   BackgroundToPanel,
@@ -17,7 +18,7 @@ export interface PageChannelError {
 
 export function usePageChannel() {
   const portRef = useRef<chrome.runtime.Port | null>(null);
-  const waiterRef = useRef<((msg: ContentToPanel) => void) | null>(null);
+  const requestSlotRef = useRef(new RequestSlot<ContentToPanel>());
   /** boundCtx 的同步镜像：同一个事件循环内 bind→read 时 React state 还没提交。 */
   const boundCtxRef = useRef<TaskContext | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTabInfo | null>(null);
@@ -25,23 +26,23 @@ export function usePageChannel() {
   const [lastError, setLastError] = useState<PageChannelError | null>(null);
 
   const closePort = useCallback(() => {
-    portRef.current?.disconnect();
+    const port = portRef.current;
     portRef.current = null;
-    waiterRef.current = null;
+    requestSlotRef.current.cancel('PORT_CLOSED');
     boundCtxRef.current = null;
+    port?.disconnect();
   }, []);
 
   useEffect(() => {
     const onMessage = (msg: BackgroundToPanel) => {
       if (msg.type === 'ACTIVE_TAB') setActiveTab({ tabId: msg.tabId, epoch: msg.epoch });
       if (msg.type === 'EPOCH_INVALIDATED') {
-        setBoundCtx((prev) => {
-          if (prev && prev.tabId === msg.tabId) {
-            setLastError({ code: 'TAB_CHANGED', message: '页面已导航或关闭，旧任务已作废' });
-            return null;
-          }
-          return prev;
-        });
+        const bound = boundCtxRef.current;
+        if (!bound || bound.tabId !== msg.tabId) return;
+        boundCtxRef.current = null;
+        requestSlotRef.current.cancel('PAGE_CHANGED');
+        setBoundCtx(null);
+        setLastError({ code: 'TAB_CHANGED', message: '页面已导航或关闭，旧任务已作废' });
       }
     };
     chrome.runtime.onMessage.addListener(onMessage);
@@ -72,9 +73,16 @@ export function usePageChannel() {
       tabId: info.tabId,
     });
     if (!ensured.ok) {
+      console.warn('[wisp] content script injection failed:', ensured.message);
+      const message =
+        ensured.code === 'PAGE_PERMISSION_REQUIRED'
+          ? '尚未授权当前标签页。请在这个页面点击工具栏 Wisp 图标，然后重新读取。'
+          : ensured.code === 'TAB_CHANGED'
+            ? '当前标签页已切换或关闭，请重新读取。'
+            : '浏览器不允许扩展读取此页面，请换一个普通网页。';
       setLastError({
         code: ensured.code,
-        message: '该页面不允许扩展读取（浏览器内置页、应用商店等）。请点击工具栏 Wisp 图标授权当前页面，或换一个普通网页。',
+        message,
       });
       return null;
     }
@@ -83,14 +91,19 @@ export function usePageChannel() {
     const port = chrome.tabs.connect(info.tabId, { name: PORT_NAME });
     port.onMessage.addListener((msg: ContentToPanel) => {
       if (msg.type === 'PAGE_UNLOADING' || msg.type === 'PAGE_NAVIGATED') {
+        boundCtxRef.current = null;
+        requestSlotRef.current.cancel('PAGE_CHANGED');
         setBoundCtx(null);
         setLastError({ code: 'TAB_CHANGED', message: '页面已跳转，旧任务已作废，可重新读取本页' });
         return;
       }
-      waiterRef.current?.(msg);
+      requestSlotRef.current.resolve(msg);
     });
     port.onDisconnect.addListener(() => {
+      if (portRef.current !== port) return;
       portRef.current = null;
+      boundCtxRef.current = null;
+      requestSlotRef.current.cancel('PORT_CLOSED');
       setBoundCtx(null);
     });
     portRef.current = port;
@@ -104,24 +117,19 @@ export function usePageChannel() {
 
   /** 发一条 Port 消息并等待对应回复；同一时刻只允许一个在途请求。 */
   const request = useCallback(
-    (msg: PanelToContent, timeoutMs = 8000): Promise<ContentToPanel> =>
-      new Promise((resolve, reject) => {
-        const port = portRef.current;
-        if (!port) {
-          reject(new Error('PORT_CLOSED'));
-          return;
-        }
-        const timer = setTimeout(() => {
-          waiterRef.current = null;
-          reject(new Error('PORT_TIMEOUT'));
-        }, timeoutMs);
-        waiterRef.current = (reply) => {
-          clearTimeout(timer);
-          waiterRef.current = null;
-          resolve(reply);
-        };
+    (msg: PanelToContent, timeoutMs = 8000): Promise<ContentToPanel> => {
+      const port = portRef.current;
+      if (!port) return Promise.reject(new Error('PORT_CLOSED'));
+      if (requestSlotRef.current.busy) return Promise.reject(new Error('PORT_BUSY'));
+
+      const response = requestSlotRef.current.start(timeoutMs);
+      try {
         port.postMessage(msg);
-      }),
+      } catch {
+        requestSlotRef.current.cancel('PORT_CLOSED');
+      }
+      return response;
+    },
     [],
   );
 

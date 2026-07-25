@@ -17,7 +17,7 @@ export interface TaskContext {
 }
 
 export type ErrorCode =
-  | 'PAGE_INJECTION_BLOCKED' | 'PAGE_NO_CONTENT' | 'PAGE_TOO_LONG'
+  | 'PAGE_PERMISSION_REQUIRED' | 'PAGE_INJECTION_BLOCKED' | 'PAGE_NO_CONTENT' | 'PAGE_TOO_LONG'
   | 'WEBGPU_UNAVAILABLE' | 'WEBGPU_CRASH'
   | 'DOWNLOAD_FAILED' | 'DOWNLOAD_CANCELLED' | 'CACHE_CORRUPT'
   | 'OFFLINE_NO_MODEL' | 'STORAGE_FULL' | 'TAB_CHANGED'
@@ -42,6 +42,7 @@ export type ContentToPanel =
 // —— runtime：Content Script → Service Worker —— //
 export type ContentToBackground =
   | { type: 'PING' }                                    // SW 探活，CS 回 { type: 'PONG' }
+  | { type: 'PAGE_NAVIGATED'; url: string }              // SPA 同文档导航，通知 SW 递增 epoch
   | { type: 'TOOLBAR_ACTION'; action: SelectionAction; text: string; url: string; lang: Lang };
 
 // —— runtime：Side Panel → Service Worker —— //

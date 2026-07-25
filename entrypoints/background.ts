@@ -1,4 +1,5 @@
 import { EPOCH_STORAGE_KEY, EpochRegistry } from '../core/messaging/epoch';
+import { classifyPageInjectionError } from '../core/messaging/injectionError';
 import { PendingActionStore } from '../core/messaging/pending';
 import type {
   ActiveTabInfo,
@@ -34,6 +35,12 @@ export default defineBackground(() => {
     chrome.runtime.sendMessage(msg).catch(() => undefined);
   }
 
+  function invalidateEpoch(tabId: number): void {
+    const epoch = epochs.bump(tabId);
+    persistEpochs();
+    broadcast({ type: 'EPOCH_INVALIDATED', tabId, epoch });
+  }
+
   chrome.action.onClicked.addListener((tab) => {
     if (tab.windowId === undefined) return;
     chrome.sidePanel
@@ -46,9 +53,7 @@ export default defineBackground(() => {
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.status !== 'loading') return;
     void hydrated.then(() => {
-      const epoch = epochs.bump(tabId);
-      persistEpochs();
-      broadcast({ type: 'EPOCH_INVALIDATED', tabId, epoch });
+      invalidateEpoch(tabId);
     });
   });
 
@@ -85,10 +90,11 @@ export default defineBackground(() => {
       await chrome.scripting.executeScript({ target: { tabId }, files: [CONTENT_SCRIPT_FILE] });
       return { ok: true, epoch: epochs.get(tabId) };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       return {
         ok: false,
-        code: 'PAGE_INJECTION_BLOCKED',
-        message: error instanceof Error ? error.message : String(error),
+        code: classifyPageInjectionError(message),
+        message,
       };
     }
   }
@@ -113,6 +119,12 @@ export default defineBackground(() => {
         case 'ENSURE_CONTENT_SCRIPT': {
           void ensureContentScript(msg.tabId).then(sendResponse);
           return true;
+        }
+        case 'PAGE_NAVIGATED': {
+          const tabId = sender.tab?.id;
+          if (tabId === undefined) return false;
+          void hydrated.then(() => invalidateEpoch(tabId));
+          return false;
         }
         case 'TOOLBAR_ACTION': {
           const tabId = sender.tab?.id;
