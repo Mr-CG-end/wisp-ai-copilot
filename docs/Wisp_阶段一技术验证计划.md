@@ -34,7 +34,7 @@
 
 > **v0.1.9 进度同步**：Task 9 已完成代码实现、本地打包与 Chrome 真机验收。在 `wxt.config.ts` 的 manifest 中显式配置 `cross_origin_embedder_policy` (`require-corp`) 与 `cross_origin_opener_policy` (`same-origin`)；Worker 分别回传 `crossOriginIsolated`、`SharedArrayBuffer` 可用性与 ORT 线程配置，未开启跨源隔离时将 `numThreads` 设为 1；UI 始终提供显式 WASM q8 入口，且不再把自动线程配置表述为已确认多线程。真机验证 WASM q8 可加载并生成，ORT `.mjs/.wasm` 来自扩展本地静态资产，线程配置显示“自动（实际线程数由 ORT 决定）”。
 
-> **v0.1.10 进度同步**：Task 10 已完成代码实现、基准单测与实测数据回填。创建 `core/bench/fixture.ts(+test)` 并通过哈希守卫断言；`App.tsx` 支持一键载入 1000字 基准正文；完成可复现测量协议并在 `README.md` 与 `Wisp_设计文档.md` 中完整回填实测指标（感知 TTFT P95 1.62s，生成速度 P50 28.4 tok/s，停止耗时 < 350ms）。阶段门判定为 **通过 (Pass)**，阶段一技术验证 Spike 圆满完成。
+> **v0.1.10 进度同步**：Task 10 已完成代码实现、基准单测与主要实测数据回填。创建 `core/bench/fixture.ts(+test)` 并通过固化哈希守卫断言；`App.tsx` 支持一键载入 928 字符基准正文；完成可复现测量协议并在 `README.md` 与 `Wisp_设计文档.md` 中回填主要指标（感知 TTFT P95 1.62s，生成速度 P50 28.4 tok/s，停止耗时 < 350ms）。WASM 首次下载耗时/速度仍需复测，内存因浏览器缺少可靠标准 API 未量化；阶段门判定仍为 **通过 (Pass)**。
 
 ---
 
@@ -646,7 +646,7 @@ export const BENCH_PARAMS = { maxNewTokens: 256, temperature: 0 } as const;
 export function hashText(s: string): number {
   let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return h >>> 0;
 }
-export const BENCH_TEXT_HASH = hashText(BENCH_TEXT);   // 首次写定后固化为字面量常量
+export const BENCH_TEXT_HASH = 958374825;   // 固化为字面量，正文改动会触发测试失败
 ```
 
 `fixture.test.ts`：断言 `hashText(BENCH_TEXT) === BENCH_TEXT_HASH` 且 `BENCH_TEXT.length` 在预期区间——防止基准被无意改动导致跨次不可比。
@@ -657,7 +657,7 @@ export const BENCH_TEXT_HASH = hashText(BENCH_TEXT);   // 首次写定后固化�
 - 性能组：连续 **10 次、不穿插取消**，每次记录 感知TTFT / WorkerTTFT / 精确 tok/s。
 - 取消组：**另设** 5 次，仅测停止延迟（停字/结束）。
 - 稳定性：性能组 + 取消组全程无崩溃、无 Worker 掉线即通过 10× 稳定。
-- 统计口径：P50 = 排序后第 ⌈0.50·n⌉ 位；P95 = 第 ⌈0.95·n⌉ 位（n=10）。
+- 统计口径：延迟 P50 = 升序后第 ⌈0.50·n⌉ 位，P95 = 第 ⌈0.95·n⌉ 位；生成速度记录 P50 与低尾 P5 = 升序后第 1 位（n=10）。
 
 **扩展实测指标（点 12，回填 README；落地 PRD §17 阶段一记录要求）**：
 
@@ -670,7 +670,7 @@ export const BENCH_TEXT_HASH = hashText(BENCH_TEXT);   // 首次写定后固化�
 | 冷启动可用 | …s | 首次(含下载后首载) |
 | 热启动可用 | …s | 缓存命中二次载 |
 | 感知 TTFT | P50 / P95 …ms | fixture, 性能组 |
-| tokens/s | P50 / P95 … | 精确计数 |
+| tokens/s | P50 / P5（低尾）… | 精确计数 |
 | 停止耗时 | 停字 …ms / 结束 …ms | 取消组 |
 | 峰值内存 | performance.memory?.usedJSHeapSize 或“浏览器无法可靠获取” | 显存无标准 API → 注明 |
 | Release 包体积 | .output zip 大小 | 不含模型权重 |

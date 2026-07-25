@@ -20,4 +20,5 @@ export function hashText(s: string): number {
   return h >>> 0;
 }
 
-export const BENCH_TEXT_HASH = hashText(BENCH_TEXT);
+// 固化为字面量；BENCH_TEXT 的任何改动都必须显式更新该值与基准记录。
+export const BENCH_TEXT_HASH = 958374825;

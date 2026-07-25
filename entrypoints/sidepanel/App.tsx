@@ -212,7 +212,7 @@ export function App() {
           untrustedData: inputText,
           userInput: taskType === 'qa' ? userInput || undefined : undefined,
           targetLang: taskType === 'translate' ? targetLang : undefined,
-          params: { maxNewTokens: 256, temperature: 0 },
+          params: BENCH_PARAMS,
         },
         signalId,
         Comlink.proxy((delta: string) => {

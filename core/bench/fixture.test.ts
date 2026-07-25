@@ -3,6 +3,7 @@ import { BENCH_PARAMS, BENCH_TEXT, BENCH_TEXT_HASH, hashText } from './fixture';
 
 describe('bench fixture reproduciability guard', () => {
   it('should match the locked hash', () => {
+    expect(BENCH_TEXT_HASH).toBe(958374825);
     expect(hashText(BENCH_TEXT)).toBe(BENCH_TEXT_HASH);
   });
 
