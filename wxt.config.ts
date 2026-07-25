@@ -8,7 +8,7 @@ export default defineConfig({
   manifest: ({ command }) => ({
     name: 'Wisp',
     description: 'Wisp 本地推理阶段一验证 / Wisp stage-1 inference spike',
-    permissions: ['sidePanel', 'storage'],
+    permissions: ['sidePanel', 'storage', 'activeTab', 'scripting'],
     host_permissions: [
       'https://huggingface.co/*',
       'https://cdn-lfs.huggingface.co/*',
