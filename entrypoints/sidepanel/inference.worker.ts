@@ -83,12 +83,17 @@ async function init(cfg: InitConfig, onProgress: (p: LoadProgress) => void): Pro
   const dtype = backend === 'webgpu' ? cfg.quant.webgpu : cfg.quant.wasm;
   const progress = createModelProgress(onProgress);
 
+  const loadOptions: Record<string, any> = {
+    revision: cfg.revision,
+  };
+  if (cfg.cacheOnly) {
+    loadOptions.local_files_only = true;
+  }
+
   try {
-    tokenizer = await AutoTokenizer.from_pretrained(cfg.modelId, {
-      revision: cfg.revision,
-    });
+    tokenizer = await AutoTokenizer.from_pretrained(cfg.modelId, loadOptions);
     model = await AutoModelForCausalLM.from_pretrained(cfg.modelId, {
-      revision: cfg.revision,
+      ...loadOptions,
       dtype,
       device: backend,
       progress_callback: progress.onEvent,

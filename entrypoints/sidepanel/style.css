@@ -1,0 +1,220 @@
+:root {
+  --wisp-bg: #fcfbfa;
+  --wisp-surface: #ffffff;
+  --wisp-border: #e6e2db;
+  --wisp-text-main: #1c1c1a;
+  --wisp-text-muted: #6e6b66;
+  --wisp-accent: #2d5a44;
+  --wisp-accent-hover: #234836;
+  --wisp-accent-light: #eef4f0;
+  --wisp-warning: #b45309;
+  --wisp-warning-bg: #fef3c7;
+  --wisp-error: #991b1b;
+  --wisp-error-bg: #fee2e2;
+  --wisp-radius: 8px;
+  --wisp-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--wisp-bg);
+  color: var(--wisp-text-main);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.wisp-app-header {
+  height: 44px;
+  padding: 0 16px;
+  background-color: var(--wisp-surface);
+  border-bottom: 1px solid var(--wisp-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wisp-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--wisp-accent);
+}
+
+.wisp-setup-container {
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.wisp-setup-card {
+  width: 100%;
+  max-width: 360px;
+  background: var(--wisp-surface);
+  border: 1px solid var(--wisp-border);
+  border-radius: var(--wisp-radius);
+  padding: 20px;
+  box-shadow: var(--wisp-shadow);
+  box-sizing: border-box;
+}
+
+.wisp-header-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--wisp-accent);
+  background: var(--wisp-accent-light);
+  padding: 2px 8px;
+  border-radius: 12px;
+  margin-bottom: 12px;
+}
+
+.wisp-setup-heading {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 8px 0;
+}
+
+.wisp-setup-intro {
+  color: var(--wisp-text-muted);
+  margin: 0 0 16px 0;
+  font-size: 12px;
+}
+
+.wisp-meta-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.wisp-meta-item {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  border-bottom: 1px dashed var(--wisp-border);
+  padding-bottom: 4px;
+}
+
+.wisp-meta-label {
+  color: var(--wisp-text-muted);
+}
+
+.wisp-meta-value {
+  font-weight: 500;
+}
+
+.wisp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 36px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s;
+  border: 1px solid transparent;
+}
+
+.wisp-btn-primary {
+  background-color: var(--wisp-accent);
+  color: #ffffff;
+}
+
+.wisp-btn-primary:hover {
+  background-color: var(--wisp-accent-hover);
+}
+
+.wisp-btn-secondary {
+  background-color: var(--wisp-surface);
+  border-color: var(--wisp-border);
+  color: var(--wisp-text-main);
+}
+
+.wisp-btn-secondary:hover {
+  background-color: var(--wisp-bg);
+}
+
+.wisp-btn-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wisp-action-area {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wisp-progress-box {
+  height: 6px;
+  background-color: var(--wisp-bg);
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 16px 0 8px 0;
+}
+
+.wisp-progress-bar {
+  height: 100%;
+  background-color: var(--wisp-accent);
+  transition: width 0.2s ease;
+}
+
+.wisp-progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: var(--wisp-text-muted);
+  margin-bottom: 16px;
+}
+
+.wisp-file-tag {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wisp-spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid var(--wisp-accent-light);
+  border-top-color: var(--wisp-accent);
+  border-radius: 50%;
+  animation: wisp-spin 0.8s linear infinite;
+  margin-bottom: 12px;
+}
+
+@keyframes wisp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.wisp-error-banner {
+  background-color: var(--wisp-error-bg);
+  color: var(--wisp-error);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  margin-bottom: 16px;
+}
+
+.wisp-border-warning {
+  border-color: var(--wisp-warning);
+}

@@ -14,6 +14,7 @@ export interface InitConfig {
   revision: string; // 必须是「下载前」锁定的确切 commit sha
   quant: { webgpu: 'q4f16'; wasm: 'q8' };
   backend?: 'webgpu' | 'wasm';
+  cacheOnly?: boolean; // 若为 true，模型只使用本地 Cache，禁止联网下载缺失文件
 }
 export interface InitResult { backend: 'webgpu' | 'wasm'; ready: boolean; selfCheckMs: number; }
 
