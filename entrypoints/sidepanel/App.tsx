@@ -1,6 +1,7 @@
 import { useReducer, useRef, useState } from 'react';
 import * as Comlink from 'comlink';
 import { useInference } from './useInference';
+import { usePageChannel } from './usePageChannel';
 import type { GenerateRequest, GenStats, Lang, LoadProgress, InitResult } from '../../core/inference/contract';
 import { reduce } from '../../core/inference/backend';
 import { selectNewModelCacheUrls } from '../../core/inference/cacheSelection';
@@ -41,6 +42,20 @@ async function clearNewModelCacheEntries(existingUrls: ReadonlySet<string> | nul
 
 export function App() {
   const { getApi, recreate } = useInference();
+  const page = usePageChannel();
+  const [pageInfo, setPageInfo] = useState<string>('');
+
+  const handleReadPage = async () => {
+    const ctx = await page.bindActiveTab();
+    if (!ctx) return;
+    const extracted = await page.readPage('initial', ctx);
+    setPageInfo(
+      extracted
+        ? `${extracted.title} | 原文 ${extracted.charCount} 字 | 送模型 ${extracted.text.length} 字 | 截断=${extracted.truncated} | ${extracted.method}`
+        : '未提取到正文',
+    );
+  };
+
   const [initState, dispatch] = useReducer(reduce, { status: 'idle' });
   const [inputText, setInputText] = useState(DEFAULT_TEXT);
   const [userInput, setUserInput] = useState('');
@@ -261,6 +276,11 @@ export function App() {
   return (
     <main style={{ padding: 16, fontFamily: 'system-ui' }}>
       <h2>Wisp Spike (Task 10)</h2>
+      <div style={{ marginBottom: 12, padding: 8, background: '#f0f4f8', borderRadius: 4 }}>
+        <button onClick={handleReadPage}>读取本页（Task 4 链路验证）</button>
+        {pageInfo && <div style={{ marginTop: 4, fontSize: 12 }}>{pageInfo}</div>}
+        {page.lastError && <div style={{ marginTop: 4, color: '#d32f2f', fontSize: 12 }}>{page.lastError.message}</div>}
+      </div>
       {WORKER_UNAVAILABLE && (
         <div style={{ color: '#8a4b08', marginBottom: 12 }}>
           WXT 实时开发模式不支持扩展 Worker。请运行 npm run build:dev 后重新加载扩展。
