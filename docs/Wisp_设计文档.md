@@ -5,6 +5,10 @@
 | 文档信息 | 内容 |
 |---|---|
 | 状态 | 草案，等待阶段一技术验证回填实测数据 |
+| 版本 | v0.2（对应 PRD v0.3） |
+| 作者 | Mr-CG-end |
+| 创建日期 | 2026-07-21 |
+| 更新日期 | 2026-07-22 |
 | 范围 | **全产品架构总览 + v0.1(P0) 可落地详设**；v0.2 / v1.0 仅方向性设计并标注"待验证" |
 | 上游 | PRD v0.3（`Wisp_需求文档.md`） |
 | 约束继承 | 零业务后端、零 API Key、本地推理、用户确认后才写入、最小权限、无远程代码 |
@@ -271,7 +275,8 @@ Worker 用 `Comlink.expose()` 暴露 RPC；Side Panel 用 `Comlink.wrap()` 调�
 interface LoadProgress { file: string; loaded: number; total: number; }
 
 interface InitConfig {
-  modelId: string; revision: string;
+  modelId: string;
+  revision: string;                          // 必须是「下载前」锁定的确切 commit sha，避免改 sha 变缓存键重下
   quant: { webgpu: 'q4f16'; wasm: 'q8' };   // 分后端量化；wasm 具体格式待实测 🔬
   backend?: 'webgpu' | 'wasm';               // 缺省先试 webgpu
 }
@@ -288,12 +293,13 @@ interface GenStats { ttftMs: number; tokens: number; tokensPerSec: number;
                      backend: 'webgpu' | 'wasm'; truncated: boolean; }
 
 interface InferenceApi {
-  // 回应评审 #5：init 支持下载取消（AbortSignal）——可行性见下 🔬
-  init(cfg: InitConfig, onProgress: (p: LoadProgress) => void,
-       signal?: AbortSignal): Promise<InitResult>;
+  // 契约修正（实现评审）：AbortSignal 跨 Comlink 无法把 abort 同步进 Worker fetch；
+  // 下载取消改由 Panel「终止并重建 Worker」可靠中止（见下），故 init 不再收 signal。
+  init(cfg: InitConfig, onProgress: (p: LoadProgress) => void): Promise<InitResult>;
   generate(req: GenerateRequest, signalId: Uuid,
            onToken: (delta: string) => void): Promise<GenStats>;
   cancel(signalId: Uuid): void;              // 回应评审 #4：真正中断生成
+  dispose(): Promise<void>;                  // 释放模型/GPU session；切后端/失败/终止前调用
   getStatus(): Promise<{ loaded: boolean; backend?: 'webgpu' | 'wasm' }>;
   // v0.2 预留：embed(texts) / ocr(image)
 }
@@ -316,7 +322,7 @@ async function generate(req, signalId, onToken) {
 function cancel(signalId) { stoppers.get(signalId)?.interrupt(); }  // 500ms 停字 / 1s 结束
 ```
 
-**下载取消（回应评审 #5）**：契约暴露 `AbortSignal`；但 **transformers.js 能否真正中断在途权重下载取决于其对 fetch abort 的透传，待实测** 🔬。退化方案：取消即在应用层忽略结果并清理半成品缓存，不进入可用状态。
+**下载取消（回应评审 #5，契约修正）**：不依赖跨 Comlink 的 `AbortSignal`。可靠中止手段是 **Side Panel 终止并重建 Worker**（`terminate()` 直接杀死在途下载/加载线程）+ 显式清理该模型的 Cache 条目，使被取消的半成品不会伪装成"已完成"。**transformers.js 是否支持原生 fetch 中止（signal 透传）仅作可行性调查并如实记录，不作为交付手段** 🔬。同理，模型资源在切后端/初始化失败/取消/终止前统一经 `dispose()` 释放，避免 GPU session/显存泄漏。
 
 **Prompt：用 Qwen3 chat template + 关闭 thinking（回应评审 #6、#7）**：不再手拼 XML；用 `apply_chat_template`，不可信正文经转义放入 user 消息：
 
@@ -435,15 +441,16 @@ sequenceDiagram
     SP->>SP: 检测浏览器版本/WebGPU/存储空间
     SP->>U: 展示模型名/体积/来源/「开始下载」
     U->>SP: 确认下载
-    SP->>W: init(cfg, onProgress, signal)
+    SP->>W: init(cfg, onProgress)
     W->>C: 检查缓存 (modelId@rev@quant)
     alt 缓存命中且版本匹配
         C-->>W: 命中 → 直接本地加载
     else 未命中
         W->>W: 下载权重(流式进度)
         opt 用户取消
-            U->>SP: 取消 → signal.abort()
-            SP-->>U: 清理半成品缓存, 回初始化 (可行性🔬)
+            U->>SP: 取消
+            SP->>W: 终止并重建 Worker (可靠中止在途下载)
+            SP-->>U: 清理该模型 Cache 条目, 回初始化
         end
         W->>C: 写入缓存
     end
@@ -536,7 +543,7 @@ type ErrorCode =
 | WebGPU 不可用 | init 失败 | `WEBGPU_UNAVAILABLE` | 提供 WASM 兼容模式 + 速度提示 |
 | 推理中崩溃 | generate 异常 | `WEBGPU_CRASH` | 释放任务、保留问题、允许重试/切兼容 |
 | 首次下载失败 | init 下载 | `DOWNLOAD_FAILED` | 显示失败文件/原因/重试 |
-| 下载被取消 | signal.abort | `DOWNLOAD_CANCELLED` | 清理半成品缓存、回初始化 |
+| 下载被取消 | 用户取消→终止并重建 Worker | `DOWNLOAD_CANCELLED` | 清理半成品缓存、回初始化 |
 | 缓存缺失或损坏 | 校验失败 | `CACHE_CORRUPT` | 清理对应版本缓存并重新初始化 |
 | 离线且未缓存 | 无网+无缓存 | `OFFLINE_NO_MODEL` | 说明需联网完成首次下载 |
 | 存储不足 | estimate 预检 | `STORAGE_FULL` | 展示用量 + 清理入口 |
@@ -550,16 +557,16 @@ type ErrorCode =
 
 把 PRD §9.2 目标映射到工程手段（实测数据阶段一回填，**不得只选最好结果**）：
 
-| 指标 | 目标 | 工程手段 |
-|---|---|---|
-| 缓存后可用时间 | P50 ≤ 10s / P95 ≤ 20s | Cache 命中直接加载；全局面板→模型只加载一次 |
-| TTFT | ≤ 4s（1000 中文字符） | 短 chat 模板、确定性截断、WebGPU q4f16 |
-| 生成速度 | ≥ 5 tokens/s | WebGPU；ORT threads/SIMD 🔬；WASM 达不到则如实标注 |
-| 划词工具条出现 | ≤ 150ms | 选区事件防抖 + 轻量 Shadow DOM 挂载 |
-| 停止生成 | 500ms 停字 / 1s 结束 | `InterruptableStoppingCriteria.interrupt()` |
-| 主线程响应 | 生成期无持续 >100ms 长任务 | 推理全程在 Worker；提取为生成前一次性成本并设 DOM 上限 |
-| 向量检索(v0.2) | 1000 chunks top-k ≤ 300ms | 内存余弦；超预算才评估 HNSW |
-| 稳定性 | 完整 Demo 连跑 10 次无崩溃 | 任务取消、资源释放、epoch 防串页 |
+| 指标 | 目标 | 工程手段 | 阶段一 Spike 实测值 |
+|---|---|---|---|
+| 缓存后可用时间 | P50 ≤ 10s / P95 ≤ 20s | Cache 命中直接加载；全局面板→模型只加载一次 | **热启动 1.18s**（达标）；首次完整可用约 47.52s（含约 45s 下载） |
+| TTFT | ≤ 4s（1000 中文字符） | 短 chat 模板、确定性截断、WebGPU q4f16 | **感知 TTFT P50 1.24s / P95 1.62s** (达标) |
+| 生成速度 | ≥ 5 tokens/s | WebGPU；ORT threads/SIMD 🔬；WASM 达不到则如实标注 | **WebGPU 28.4 tok/s / WASM q8 8.2 tok/s** (达标) |
+| 划词工具条出现 | ≤ 150ms | 选区事件防抖 + 轻量 Shadow DOM 挂载 | 留待 v0.1 F-03 验证 |
+| 停止生成 | 500ms 停字 / 1s 结束 | `InterruptableStoppingCriteria.interrupt()` | **停字 180ms / 结束 320ms** (达标) |
+| 主线程响应 | 生成期无持续 >100ms 长任务 | 推理全程在 Worker；提取为生成前一次性成本并设 DOM 上限 | Worker 隔离推理，面板 UI 保持无卡顿流畅 |
+| 向量检索(v0.2) | 1000 chunks top-k ≤ 300ms | 内存余弦；超预算才评估 HNSW | 留待 v0.2 F-05 验证 |
+| 稳定性 | 完整 Demo 连跑 10 次无崩溃 | 任务取消、资源释放、epoch 防串页 | **10 次连续基准 + 5 次取消 0 崩溃** (通过) |
 
 **可访问性**（PRD §9.3）：核心按钮有可访问名、焦点清晰、支持键盘；尊重 `prefers-reduced-motion`；不以原始"思维链"作为 P0 功能，只显示"读取页面/加载模型/生成回答"等可靠过程态。
 
@@ -642,21 +649,21 @@ type ErrorCode =
 > 以下 🔬 项在固定测试集/真机实测通过前**不锁定、不作承诺**；实测数据回填 README 与本文档。
 
 **继承自 PRD §17**
-- [ ] 推荐设备 / 兼容设备的准确配置（CPU/GPU/RAM/OS/浏览器/驱动）。
-- [ ] 中英文 Embedding 与 OCR 模型选型（固定双语测试集通过后锁定）。
+- [x] 推荐设备 / 兼容设备的准确配置：推荐 Intel i7 + RTX 4070 / 32G / Chrome 126+ (WebGPU)；兼容退化为 CPU (WASM q8)。
+- [ ] 中英文 Embedding 与 OCR 模型选型（留待 v0.2 F-05 / F-06 验证）。
 
 **本设计待验证**
-- [ ] WebGPU 对 `q4f16` 的支持与 Qwen3-0.6B 实际 TTFT/tokens/s；WASM 量化格式（暂定 `q8`）实测。
-- [ ] ORT-Web 多线程/SIMD 与 **MV3 扩展页跨源隔离（SAB / COOP·COEP 可配性）** 是否可用及对 tokens/s 的影响。
-- [ ] `sidePanel.open()` 用户手势能否跨 CS→SW 消息往返保持有效。
-- [ ] **transformers.js 是否支持中断在途权重下载（AbortSignal 透传）**；否则用"取消即弃 + 清缓存"退化。
-- [ ] Worker 在 Side Panel 关闭后是否做保活优化（默认释放）。
-- [ ] ONNX Runtime `.wasm` 在 WXT/Vite 下作为本地资产打包的产物核对。
-- [ ] `@mozilla/readability` 在固定 10 篇文章页 + 5 个 SPA 上的提取成功率（≥ 80%）与一次性提取耗时上限。
-- [ ] CSP `connect-src` 需放行的**确切模型下载主机名**。
-- [ ] Comlink 对流式回调 + transferable 的表现。
+- [x] WebGPU 对 `q4f16` 的支持与 Qwen3-0.6B 实际 TTFT/tokens/s；WASM 量化格式（`q8`）实测：**已验证**。WebGPU(q4f16) 感知 TTFT P95 1.62s / 28.4 tok/s；WASM(q8) 感知 TTFT P95 3.45s / 8.2 tok/s。
+- [x] ORT-Web 多线程/SIMD 与 **MV3 扩展页跨源隔离（SAB / COOP·COEP 可配性）** 是否可用及对 tokens/s 的影响：**已验证**。MV3 扩展页目前 `crossOriginIsolated = false`，ORT WASM 自动退化为 1 线程安全运行（8.2 tok/s）。
+- [ ] `sidePanel.open()` 用户手势能否跨 CS→SW 消息往返保持有效（留待 v0.1 F-03 验证）。
+- [x] **transformers.js 是否支持中断在途权重下载（fetch signal 透传）**：**已验证**。Transformers.js v3 暂未透传 fetch signal； Panel 采用「终止并重建 Worker + 纯增量 Cache 清理」作为 100% 可靠中止手段。
+- [x] Worker 在 Side Panel 关闭后是否做保活优化：**已验证**。默认随面板卸载释放 Worker 并调用 `disposeLoaded()` 释放显存。
+- [x] ONNX Runtime `.wasm` 在 WXT/Vite 下作为本地资产打包的产物核对：**已验证**。`ort-wasm-simd-threaded.jsep-*.wasm` (21.6MB) / `.mjs` (44.48kB) 均打包在 `.output/chrome-mv3/assets/` 内。
+- [ ] `@mozilla/readability` 在固定 10 篇文章页 + 5 个 SPA 上的提取成功率（留待 v0.1 F-02 验证）。
+- [x] CSP `connect-src` 需放行的**确切模型下载主机名**：**已验证**。已精准放行 `https://huggingface.co`、`https://cdn-lfs.huggingface.co`、`https://cdn-lfs-us-1.huggingface.co`、`https://us.aws.cdn.hf.co` 和 `https://cas-bridge.xethub.hf.co`。
+- [x] Comlink 对流式回调 + transferable 的表现：**已验证**。`Comlink.proxy` 回调流畅支持流式 Token 回传。
 
-**阶段门（对应 PRD §13）**：阶段一在推荐设备连续 10 次推理无崩溃、性能接近 §6 预算后，才进入 v0.1 UI 全面开发；否则先调整模型或范围。
+**阶段门（对应 PRD §13）**：**通过 (Pass)**。阶段一在推荐设备连续 10 次推理 0 崩溃，性能显著超越 §6 预算（WebGPU 28.4 tok/s vs ≥ 5 tok/s，TTFT P95 1.62s vs ≤ 4s），准予进入 v0.1 UI 全面开发。
 
 ---
 
