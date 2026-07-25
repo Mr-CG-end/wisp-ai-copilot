@@ -10,6 +10,7 @@ import type {
   TaskContext,
 } from '../../core/messaging/types';
 import { PORT_NAME } from '../../core/messaging/types';
+import { usePanelStore } from './store';
 
 export interface PageChannelError {
   code: ErrorCode;
@@ -22,16 +23,30 @@ export function usePageChannel() {
   /** boundCtx 的同步镜像：同一个事件循环内 bind→read 时 React state 还没提交。 */
   const boundCtxRef = useRef<TaskContext | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTabInfo | null>(null);
-  const [boundCtx, setBoundCtx] = useState<TaskContext | null>(null);
+  const [boundCtx, setBoundCtxState] = useState<TaskContext | null>(null);
   const [lastError, setLastError] = useState<PageChannelError | null>(null);
+
+  const commitBoundCtx = useCallback((ctx: TaskContext | null) => {
+    boundCtxRef.current = ctx;
+    setBoundCtxState(ctx);
+    const store = usePanelStore.getState();
+    store.setBoundCtx(ctx);
+    if (!ctx && store.currentTask?.status === 'loading') {
+      store.failTask(store.currentTask.id, {
+        code: 'TAB_CHANGED',
+        message: '页面已刷新、跳转或断开，旧任务已停止接收内容。',
+        retryable: true,
+      });
+    }
+  }, []);
 
   const closePort = useCallback(() => {
     const port = portRef.current;
     portRef.current = null;
     requestSlotRef.current.cancel('PORT_CLOSED');
-    boundCtxRef.current = null;
+    commitBoundCtx(null);
     port?.disconnect();
-  }, []);
+  }, [commitBoundCtx]);
 
   useEffect(() => {
     const onMessage = (msg: BackgroundToPanel) => {
@@ -39,9 +54,8 @@ export function usePageChannel() {
       if (msg.type === 'EPOCH_INVALIDATED') {
         const bound = boundCtxRef.current;
         if (!bound || bound.tabId !== msg.tabId) return;
-        boundCtxRef.current = null;
         requestSlotRef.current.cancel('PAGE_CHANGED');
-        setBoundCtx(null);
+        commitBoundCtx(null);
         setLastError({ code: 'TAB_CHANGED', message: '页面已导航或关闭，旧任务已作废' });
       }
     };
@@ -53,7 +67,7 @@ export function usePageChannel() {
       chrome.runtime.onMessage.removeListener(onMessage);
       closePort();
     };
-  }, [closePort]);
+  }, [closePort, commitBoundCtx]);
 
   /**
    * 用户显式「在本页启用 Wisp」：注入 CS 并建立 Port。
@@ -89,9 +103,8 @@ export function usePageChannel() {
     const port = chrome.tabs.connect(info.tabId, { name: PORT_NAME });
     port.onMessage.addListener((msg: ContentToPanel) => {
       if (msg.type === 'PAGE_UNLOADING' || msg.type === 'PAGE_NAVIGATED') {
-        boundCtxRef.current = null;
         requestSlotRef.current.cancel('PAGE_CHANGED');
-        setBoundCtx(null);
+        commitBoundCtx(null);
         setLastError({ code: 'TAB_CHANGED', message: '页面已跳转，旧任务已作废，可重新读取本页' });
         return;
       }
@@ -100,18 +113,16 @@ export function usePageChannel() {
     port.onDisconnect.addListener(() => {
       if (portRef.current !== port) return;
       portRef.current = null;
-      boundCtxRef.current = null;
       requestSlotRef.current.cancel('PORT_CLOSED');
-      setBoundCtx(null);
+      commitBoundCtx(null);
     });
     portRef.current = port;
 
     const ctx: TaskContext = { tabId: info.tabId, url: '', epoch: ensured.epoch };
     setActiveTab(info);
-    setBoundCtx(ctx);
-    boundCtxRef.current = ctx;
+    commitBoundCtx(ctx);
     return ctx;
-  }, [closePort]);
+  }, [closePort, commitBoundCtx]);
 
   /** 发一条 Port 消息并等待对应回复；同一时刻只允许一个在途请求。 */
   const request = useCallback(
@@ -134,6 +145,7 @@ export function usePageChannel() {
   /** `ctx` 可由调用方显式传入（刚 bind 完的那一轮），否则用当前绑定。 */
   const readPage = useCallback(
     async (reason: 'initial' | 'reread', ctx?: TaskContext) => {
+      setLastError(null);
       const bound = ctx ?? boundCtxRef.current;
       if (!bound) throw new Error('NOT_BOUND');
       const reply = await request({ type: 'EXTRACT', reason, epoch: bound.epoch });
@@ -143,11 +155,10 @@ export function usePageChannel() {
       }
       if (reply.type !== 'EXTRACTED') return null;
       const next: TaskContext = { ...reply.ctx, tabId: bound.tabId };
-      setBoundCtx(next);
-      boundCtxRef.current = next;
+      commitBoundCtx(next);
       return { ...reply, ctx: next };
     },
-    [request],
+    [commitBoundCtx, request],
   );
 
   /**
@@ -217,9 +228,8 @@ export function usePageChannel() {
       const nextCtx: TaskContext = { ...reply.ctx, tabId: info.tabId };
       candidatePort.onMessage.addListener((msg: ContentToPanel) => {
         if (msg.type === 'PAGE_UNLOADING' || msg.type === 'PAGE_NAVIGATED') {
-          boundCtxRef.current = null;
           requestSlotRef.current.cancel('PAGE_CHANGED');
-          setBoundCtx(null);
+          commitBoundCtx(null);
           setLastError({ code: 'TAB_CHANGED', message: '页面已跳转，旧任务已作废，可重新读取本页' });
           return;
         }
@@ -228,14 +238,12 @@ export function usePageChannel() {
       candidatePort.onDisconnect.addListener(() => {
         if (portRef.current !== candidatePort) return;
         portRef.current = null;
-        boundCtxRef.current = null;
         requestSlotRef.current.cancel('PORT_CLOSED');
-        setBoundCtx(null);
+        commitBoundCtx(null);
       });
 
       portRef.current = candidatePort;
-      setBoundCtx(nextCtx);
-      boundCtxRef.current = nextCtx;
+      commitBoundCtx(nextCtx);
 
       return {
         ctx: nextCtx,
@@ -250,7 +258,7 @@ export function usePageChannel() {
       setLastError({ code: 'PAGE_INJECTION_BLOCKED', message: '提取候选页面正文超时或失败' });
       return null;
     }
-  }, [closePort]);
+  }, [closePort, commitBoundCtx]);
 
   const requestSelection = useCallback(
     async (ctx?: TaskContext) => {

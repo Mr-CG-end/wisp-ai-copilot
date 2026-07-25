@@ -37,6 +37,13 @@ export interface CurrentTask {
   status: AsyncStatus;
   retryable: boolean;
   source: string;
+  userInput?: string;
+  truncated?: boolean;
+  contextChars?: number;
+}
+
+export interface TaskHistoryEntry extends CurrentTask {
+  output: string;
 }
 
 export interface ErrorState {
@@ -48,6 +55,7 @@ export interface ErrorState {
 export interface PanelStoreState {
   // 模型状态
   modelStatus: ModelStatus;
+  modelBackend: 'webgpu' | 'wasm' | null;
   downloadPct: number;
 
   // 页面绑定与快照
@@ -57,18 +65,20 @@ export interface PanelStoreState {
   // 当前任务与输出
   currentTask: CurrentTask | null;
   streamBuffer: string;
+  history: TaskHistoryEntry[];
 
   // 错误状态
   error: ErrorState | null;
 
   // Actions
   setModelStatus: (status: ModelStatus, error?: ErrorState | null) => void;
+  setModelBackend: (backend: 'webgpu' | 'wasm' | null) => void;
   setDownloadPct: (pct: number) => void;
   setBoundCtx: (boundCtx: TaskContext | null) => void;
   setPage: (page: PageInfo | null) => void;
-  startTask: (task: CurrentTask) => void;
+  startTask: (task: CurrentTask, options?: { archiveCurrent?: boolean }) => void;
   appendStream: (taskId: Uuid, text: string) => void;
-  finishTask: (taskId: Uuid) => void;
+  finishTask: (taskId: Uuid, result?: { truncated?: boolean }) => void;
   cancelTask: (taskId: Uuid) => void;
   failTask: (taskId: Uuid, error: ErrorState) => void;
   setError: (error: ErrorState | null) => void;
@@ -77,11 +87,13 @@ export interface PanelStoreState {
 
 const initialState = {
   modelStatus: 'uninitialized' as ModelStatus,
+  modelBackend: null,
   downloadPct: 0,
   boundCtx: null,
   page: null,
   currentTask: null,
   streamBuffer: '',
+  history: [],
   error: null,
 };
 
@@ -93,40 +105,77 @@ export const usePanelStore = create<PanelStoreState>((set) => ({
     error: error ?? (modelStatus === 'error' ? state.error : null),
   })),
 
+  setModelBackend: (modelBackend) => set({ modelBackend }),
+
   setDownloadPct: (downloadPct) => set({ downloadPct }),
 
   setBoundCtx: (boundCtx) => set({ boundCtx }),
 
   setPage: (page) => set({ page }),
 
-  startTask: (task) => set({
-    currentTask: task,
-    streamBuffer: '',
-    error: null,
+  startTask: (task, options) => set((state) => {
+    const shouldArchive = options?.archiveCurrent !== false;
+    const canArchive = Boolean(
+      shouldArchive
+      && state.currentTask
+      && state.streamBuffer.trim(),
+    );
+    const history = canArchive
+      ? [
+          ...state.history,
+          { ...state.currentTask!, output: state.streamBuffer },
+        ].slice(-20)
+      : state.history;
+    return {
+      currentTask: task,
+      streamBuffer: '',
+      history,
+      error: null,
+    };
   }),
 
   appendStream: (taskId, text) => set((state) => {
-    if (!state.currentTask || state.currentTask.id !== taskId) return state;
+    if (
+      !state.currentTask
+      || state.currentTask.id !== taskId
+      || state.currentTask.status !== 'loading'
+    ) return state;
     return { streamBuffer: state.streamBuffer + text };
   }),
 
-  finishTask: (taskId) => set((state) => {
-    if (!state.currentTask || state.currentTask.id !== taskId) return state;
+  finishTask: (taskId, result) => set((state) => {
+    if (
+      !state.currentTask
+      || state.currentTask.id !== taskId
+      || state.currentTask.status !== 'loading'
+    ) return state;
     const finalStatus: AsyncStatus = state.streamBuffer.trim().length === 0 ? 'empty' : 'success';
     return {
-      currentTask: { ...state.currentTask, status: finalStatus },
+      currentTask: {
+        ...state.currentTask,
+        status: finalStatus,
+        truncated: result?.truncated ?? false,
+      },
     };
   }),
 
   cancelTask: (taskId) => set((state) => {
-    if (!state.currentTask || state.currentTask.id !== taskId) return state;
+    if (
+      !state.currentTask
+      || state.currentTask.id !== taskId
+      || state.currentTask.status !== 'loading'
+    ) return state;
     return {
       currentTask: { ...state.currentTask, status: 'cancelled' },
     };
   }),
 
   failTask: (taskId, error) => set((state) => {
-    if (!state.currentTask || state.currentTask.id !== taskId) return state;
+    if (
+      !state.currentTask
+      || state.currentTask.id !== taskId
+      || state.currentTask.status !== 'loading'
+    ) return state;
     return {
       currentTask: { ...state.currentTask, status: 'error' },
       error,

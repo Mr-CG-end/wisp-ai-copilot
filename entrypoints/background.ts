@@ -43,6 +43,11 @@ export default defineBackground(() => {
 
   chrome.action.onClicked.addListener((tab) => {
     if (tab.windowId === undefined) return;
+    if (tab.id !== undefined) {
+      // action 点击会授予当前标签页 activeTab；趁授权仍有效时预先注入，
+      // 避免 Side Panel 已打开后再点“读取当前页”丢失授权。
+      void ensureContentScript(tab.id);
+    }
     chrome.sidePanel
       .open({ windowId: tab.windowId })
       .catch((error) => console.error('[wisp] sidePanel.open', error));

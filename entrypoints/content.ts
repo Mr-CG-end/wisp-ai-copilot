@@ -1,18 +1,11 @@
 import { extractArticle } from '../core/extract/article';
-import { truncateForContext } from '../core/extract/truncate';
+import { shouldInvalidateNavigation } from '../core/messaging/navigation';
 import {
   PORT_NAME,
   type ContentToBackground,
   type ContentToPanel,
   type PanelToContent,
 } from '../core/messaging/types';
-
-/** 去掉 hash 的规范化 URL：SPA 的锚点跳转不算换页，不应作废在途任务。 */
-function normalizedUrl(): string {
-  const url = new URL(location.href);
-  url.hash = '';
-  return url.toString();
-}
 
 export default defineContentScript({
   registration: 'runtime',
@@ -44,23 +37,72 @@ export default defineContentScript({
       // SPA 的 pushState/replaceState 既不销毁 Content Script，也不一定触发
       // tabs.onUpdated(status:'loading') —— 少了这一路，SPA 换页后旧任务会被当成仍然有效。
       // Navigation API（Chrome 102+）覆盖 History 与 popstate 两种情况；popstate 作为兜底。
-      let lastUrl = normalizedUrl();
-      const onNavigated = () => {
-        const next = normalizedUrl();
-        if (next === lastUrl) return;          // 纯 hash 变化不算换页
-        lastUrl = next;
-        send({ type: 'PAGE_NAVIGATED', url: location.href });
-        const backgroundMessage: ContentToBackground = { type: 'PAGE_NAVIGATED', url: location.href };
+      let lastUrl = location.href;
+      let lastScrollAt = Number.NEGATIVE_INFINITY;
+      const onScroll = () => {
+        lastScrollAt = performance.now();
+      };
+      const notifyNavigation = (
+        nextUrl: string,
+        navigationType?: string,
+        sameDocument?: boolean,
+      ) => {
+        if (!shouldInvalidateNavigation({
+          currentUrl: lastUrl,
+          nextUrl,
+          navigationType,
+          sameDocument,
+          msSinceScroll: performance.now() - lastScrollAt,
+        })) {
+          lastUrl = nextUrl;
+          return;
+        }
+        lastUrl = nextUrl;
+        send({ type: 'PAGE_NAVIGATED', url: nextUrl });
+        const backgroundMessage: ContentToBackground = { type: 'PAGE_NAVIGATED', url: nextUrl };
         void chrome.runtime.sendMessage(backgroundMessage).catch(() => undefined);
       };
+      let pendingNavigation: {
+        url: string;
+        navigationType?: string;
+        sameDocument?: boolean;
+      } | null = null;
+      const onNavigate = (event: Event) => {
+        const navigationEvent = event as Event & {
+          destination?: { url?: string; sameDocument?: boolean };
+          navigationType?: string;
+        };
+        pendingNavigation = {
+          url: navigationEvent.destination?.url ?? location.href,
+          navigationType: navigationEvent.navigationType,
+          sameDocument: navigationEvent.destination?.sameDocument,
+        };
+      };
+      const onNavigateSuccess = () => {
+        const completed = pendingNavigation;
+        pendingNavigation = null;
+        notifyNavigation(
+          completed?.url ?? location.href,
+          completed?.navigationType,
+          completed?.sameDocument,
+        );
+      };
+      const onPopState = () => notifyNavigation(location.href, 'traverse', true);
       const nav = (window as unknown as { navigation?: EventTarget }).navigation;
-      nav?.addEventListener('navigatesuccess', onNavigated);
-      window.addEventListener('popstate', onNavigated);
+      if (nav) {
+        nav.addEventListener('navigate', onNavigate);
+        nav.addEventListener('navigatesuccess', onNavigateSuccess);
+        window.addEventListener('scroll', onScroll, { passive: true });
+      } else {
+        window.addEventListener('popstate', onPopState);
+      }
 
       port.onDisconnect.addListener(() => {
         window.removeEventListener('pagehide', onPageHide);
-        window.removeEventListener('popstate', onNavigated);
-        nav?.removeEventListener('navigatesuccess', onNavigated);
+        window.removeEventListener('scroll', onScroll);
+        window.removeEventListener('popstate', onPopState);
+        nav?.removeEventListener('navigate', onNavigate);
+        nav?.removeEventListener('navigatesuccess', onNavigateSuccess);
       });
 
       port.onMessage.addListener((msg: PanelToContent) => {
@@ -72,14 +114,13 @@ export default defineContentScript({
             send({ type: 'ERROR', code: 'PAGE_NO_CONTENT', message: '当前页面没有可读正文' });
             return;
           }
-          const { text, truncated } = truncateForContext(article.text);
           send({
             type: 'EXTRACTED',
             ctx,
             title: article.title,
-            text,
+            text: article.text,
             charCount: article.charCount,
-            truncated,
+            truncated: false,
             method: article.method,
           });
           return;

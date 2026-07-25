@@ -1,3 +1,5 @@
+import { selectNewModelCacheUrls } from './cacheSelection';
+
 export const MODEL_CACHE_MANIFEST_KEY = 'wisp:model-cache-manifest:v1';
 
 export interface ModelCacheManifest {
@@ -14,7 +16,14 @@ export async function readCacheManifest(): Promise<ModelCacheManifest | null> {
   try {
     const data = await chrome.storage.local.get(MODEL_CACHE_MANIFEST_KEY);
     const manifest = data[MODEL_CACHE_MANIFEST_KEY] as ModelCacheManifest | undefined;
-    if (manifest && manifest.schema === 1 && manifest.modelId && manifest.revision) {
+    if (
+      manifest
+      && manifest.schema === 1
+      && manifest.modelId
+      && manifest.revision
+      && (manifest.backend === 'webgpu' || manifest.backend === 'wasm')
+      && (manifest.dtype === 'q4f16' || manifest.dtype === 'q8')
+    ) {
       return manifest;
     }
     return null;
@@ -35,7 +44,12 @@ export async function clearCacheManifest(): Promise<void> {
 
 export function checkCacheMatch(
   manifest: ModelCacheManifest | null,
-  expected: { modelId: string; revision: string; backend?: 'webgpu' | 'wasm' },
+  expected: {
+    modelId: string;
+    revision: string;
+    backend?: 'webgpu' | 'wasm';
+    dtype?: 'q4f16' | 'q8';
+  },
 ): boolean {
   if (!manifest || manifest.schema !== 1) return false;
   if (manifest.modelId !== expected.modelId || manifest.revision !== expected.revision) {
@@ -44,7 +58,43 @@ export function checkCacheMatch(
   if (expected.backend && manifest.backend !== expected.backend) {
     return false;
   }
+  if (expected.dtype && manifest.dtype !== expected.dtype) {
+    return false;
+  }
   return true;
+}
+
+/** 记录初始化前已经存在的 Cache API URL，用于取消时只清理本次新增文件。 */
+export async function snapshotModelCacheUrls(): Promise<Set<string> | null> {
+  if (typeof caches === 'undefined') return null;
+  const urls = new Set<string>();
+  const keys = await caches.keys();
+  for (const key of keys) {
+    const cache = await caches.open(key);
+    for (const request of await cache.keys()) {
+      urls.add(request.url);
+    }
+  }
+  return urls;
+}
+
+/** 删除本次初始化新增且属于指定模型 revision 的 Cache API 条目。 */
+export async function purgeNewModelCacheEntries(
+  existingUrls: ReadonlySet<string> | null,
+  modelId: string,
+  revision: string,
+): Promise<number> {
+  if (typeof caches === 'undefined' || existingUrls === null) return 0;
+  let removed = 0;
+  const keys = await caches.keys();
+  for (const key of keys) {
+    const cache = await caches.open(key);
+    const urls = (await cache.keys()).map((request) => request.url);
+    const addedUrls = selectNewModelCacheUrls(urls, existingUrls, modelId, revision);
+    const results = await Promise.all(addedUrls.map((url) => cache.delete(url)));
+    removed += results.filter(Boolean).length;
+  }
+  return removed;
 }
 
 /** 辅助方法：检查 Cache API 中是否有属于当前模型 revision 的响应条目 */

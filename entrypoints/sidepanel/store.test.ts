@@ -29,11 +29,13 @@ describe('usePanelStore', () => {
   it('初始状态符合规范', () => {
     const s = usePanelStore.getState();
     expect(s.modelStatus).toBe('uninitialized');
+    expect(s.modelBackend).toBeNull();
     expect(s.downloadPct).toBe(0);
     expect(s.boundCtx).toBeNull();
     expect(s.page).toBeNull();
     expect(s.currentTask).toBeNull();
     expect(s.streamBuffer).toBe('');
+    expect(s.history).toEqual([]);
     expect(s.error).toBeNull();
   });
 
@@ -49,6 +51,12 @@ describe('usePanelStore', () => {
     const s = usePanelStore.getState();
     expect(s.currentTask?.id).toBe('task-2');
     expect(s.streamBuffer).toBe('');
+    expect(s.history).toEqual([
+      expect.objectContaining({
+        id: 'task-1',
+        output: '部分输出',
+      }),
+    ]);
     expect(s.error).toBeNull();
   });
 
@@ -64,8 +72,21 @@ describe('usePanelStore', () => {
     // 2. 有内容输出
     store.startTask({ ...sampleTask, id: 'task-2' });
     store.appendStream('task-2', '摘要文本');
-    store.finishTask('task-2');
+    store.finishTask('task-2', { truncated: true });
     expect(usePanelStore.getState().currentTask?.status).toBe('success');
+    expect(usePanelStore.getState().currentTask?.truncated).toBe(true);
+  });
+
+  it('重新生成时可以替换当前回答而不写入历史', () => {
+    const store = usePanelStore.getState();
+    store.startTask(sampleTask);
+    store.appendStream('task-1', '需要替换的回答');
+    store.finishTask('task-1');
+
+    store.startTask({ ...sampleTask, id: 'task-2' }, { archiveCurrent: false });
+
+    expect(usePanelStore.getState().history).toEqual([]);
+    expect(usePanelStore.getState().currentTask?.id).toBe('task-2');
   });
 
   it('cancelTask 保留 streamBuffer 并改状态为 cancelled', () => {
@@ -77,6 +98,12 @@ describe('usePanelStore', () => {
     const s = usePanelStore.getState();
     expect(s.currentTask?.status).toBe('cancelled');
     expect(s.streamBuffer).toBe('已生成的半句');
+
+    store.finishTask('task-1');
+    store.failTask('task-1', { code: 'WORKER_ERROR', message: '迟到错误', retryable: true });
+    store.appendStream('task-1', '不应追加的迟到内容');
+    expect(usePanelStore.getState().currentTask?.status).toBe('cancelled');
+    expect(usePanelStore.getState().streamBuffer).toBe('已生成的半句');
   });
 
   it('failTask 保留 streamBuffer 并设置 error', () => {
@@ -125,6 +152,7 @@ describe('usePanelStore', () => {
   it('reset 能完全恢复初始状态', () => {
     const store = usePanelStore.getState();
     store.setModelStatus('ready');
+    store.setModelBackend('webgpu');
     store.setBoundCtx(sampleCtx);
     store.setPage(samplePage);
     store.startTask(sampleTask);
@@ -132,6 +160,7 @@ describe('usePanelStore', () => {
 
     store.reset();
     expect(usePanelStore.getState().modelStatus).toBe('uninitialized');
+    expect(usePanelStore.getState().modelBackend).toBeNull();
     expect(usePanelStore.getState().currentTask).toBeNull();
     expect(usePanelStore.getState().streamBuffer).toBe('');
   });

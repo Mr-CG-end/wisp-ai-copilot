@@ -41,4 +41,18 @@ describe('checkCacheMatch', () => {
       backend: 'wasm',
     })).toBe(false);
   });
+
+  it('指定 dtype 时必须完全匹配', () => {
+    expect(checkCacheMatch(validManifest, {
+      modelId: validManifest.modelId,
+      revision: validManifest.revision,
+      dtype: 'q4f16',
+    })).toBe(true);
+
+    expect(checkCacheMatch(validManifest, {
+      modelId: validManifest.modelId,
+      revision: validManifest.revision,
+      dtype: 'q8',
+    })).toBe(false);
+  });
 });

@@ -82,6 +82,9 @@ async function init(cfg: InitConfig, onProgress: (p: LoadProgress) => void): Pro
   const backend = cfg.backend ?? 'webgpu';
   const dtype = backend === 'webgpu' ? cfg.quant.webgpu : cfg.quant.wasm;
   const progress = createModelProgress(onProgress);
+  // Transformers.js 把 local_files_only 归入“本地模型”路径；若这里仍为 false，
+  // 它会在查询 Browser Cache 前直接抛错，把完整缓存误报为损坏。
+  env.allowLocalModels = Boolean(cfg.cacheOnly);
 
   const loadOptions: Record<string, any> = {
     revision: cfg.revision,
@@ -109,6 +112,8 @@ async function init(cfg: InitConfig, onProgress: (p: LoadProgress) => void): Pro
   } catch (e) {
     await disposeLoaded();
     throw e;
+  } finally {
+    env.allowLocalModels = false;
   }
 }
 

@@ -1,5 +1,5 @@
-/** 中文正文的上下文字符预算。Task 14 若实测感知 TTFT P95 > 4s，按 §7 规则下调到 2000 并记入 README。 */
-export const CONTEXT_CHAR_BUDGET = 3000;
+/** 中文正文的上下文字符预算。真机长文首字延迟偏高，按阶段计划的降档规则收紧到 2000。 */
+export const CONTEXT_CHAR_BUDGET = 2000;
 
 export interface TruncateResult {
   text: string;
