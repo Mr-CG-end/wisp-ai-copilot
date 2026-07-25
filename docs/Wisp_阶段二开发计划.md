@@ -1,6 +1,8 @@
 # Wisp —— 阶段二 v0.1 MVP 开发计划（对应 PRD v0.3 §13 阶段二 · Design v0.2）
 
 > 本文是 `Wisp_需求文档.md`（PRD v0.3）阶段二、`Wisp_设计文档.md`（Design v0.2）v0.1 详设的落地计划。阶段一 Spike 已判定 **通过 (Pass)**，本阶段把已验证的推理内核包装成可演示的 v0.1 MVP：**F-01 首次初始化与模型管理 + F-02 网页提取/摘要/问答 + F-03 划词即时操作**，外加消息通道、会话存储、设置与错误矩阵。
+
+> **M2 执行入口**：Task 5～8 已在 `Wisp_M2_实现计划.md` 中收口为可独立委派的实施计划。两份文档在 M2 范围内冲突时，以该独立计划为准；Task 9～14 继续以本文为准。
 >
 > **给执行者（含 AI 代理）**：本文按任务顺序逐个执行，步骤用 `- [ ]` 复选框标记进度。纯逻辑任务先写失败测试再实现（TDD），浏览器行为任务写完代码后按验收清单在 Chrome 真机核对。每个任务末尾独立提交。
 
@@ -28,7 +30,8 @@
 ### 0.1 当前进度
 
 | Task 1～4 (M1) | 已完成 | 单测 11/11 覆盖，Types/SW/Extract/Port 页面读取链路打通且 WXT 打包无错 |
-| Task 5～14 | 待执行 | 顺次推进 M2 网页问答闭环与划词管理 |
+| Task 5～8 (M2) | 已完成 | 状态容器 (ce1f5f3) + 缓存恢复 (d1e6d52) + 安全渲染 (91f60c6) + 摘要追问 (871e69d)，单测 18/18 (91 项) 全绿，WXT 生产/开发构建均打通 |
+| Task 9～14 | 待执行 | 推进 M3 划词与数据管理 |
 
 > 执行时每完成一个任务，在此表补一行状态与证据（沿用阶段一文档的进度同步方式）；Task 14 完成后在本节写入阶段门结论。
 
@@ -1739,7 +1742,7 @@ git commit -m "feat: 安全 Markdown 流式渲染与危险链接过滤（单测�
 - Modify: `entrypoints/sidepanel/App.tsx`（清空 spike UI，改为 `ModelSetup` + `TaskPanel` 的产品外壳）
 
 **Interfaces**：
-- Consumes：`usePageChannel()`、`usePanelStore`、`useInference()`、`isCtxCurrent`、`StreamMarkdown`、`truncateForContext` 的产出（`page.text` 已截断）。
+- Consumes：`usePageChannel()`、`usePanelStore`、`useInferenceContext()`、`isCtxCurrent`、`StreamMarkdown`、`truncateForContext` 的产出（`page.text` 已截断）。
 - Produces：`<TaskPanel />`；`runGeneration(type, opts)` 内部函数的行为契约（生成前 `startTask`，token 前校验 `isCtxCurrent`，结束写 `finishTask`）。Task 12 复用同一函数处理划词任务。
 
 - [ ] **Step 1：写 `TaskPanel.tsx` 的生成主循环**
