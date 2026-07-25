@@ -1,6 +1,8 @@
 import { EPOCH_STORAGE_KEY, EpochRegistry } from '../core/messaging/epoch';
 import { classifyPageInjectionError } from '../core/messaging/injectionError';
 import { PendingActionStore } from '../core/messaging/pending';
+import { purgeByTab, purgeExpired } from '../core/storage/cleanup';
+import { db, DEFAULT_RETENTION_DAYS } from '../core/storage/db';
 import type {
   ActiveTabInfo,
   BackgroundToPanel,
@@ -16,6 +18,9 @@ const CONTENT_SCRIPT_FILE = 'content-scripts/content.js';
 export default defineBackground(() => {
   const epochs = new EpochRegistry();
   const pending = new PendingActionStore();
+
+  void purgeExpired(db, Date.now())
+    .catch((error) => console.error('[wisp] purgeExpired', error));
 
   // MV3 Service Worker 空闲即回收。epoch 存 chrome.storage.session：
   // 它跨 SW 重启保留、随浏览器会话结束清空 —— 与 tabId 的生命周期正好对齐。
@@ -68,6 +73,13 @@ export default defineBackground(() => {
       persistEpochs();
       broadcast({ type: 'EPOCH_INVALIDATED', tabId, epoch: -1 });
     });
+    void chrome.storage.local
+      .get('retentionDays')
+      .then(({ retentionDays = DEFAULT_RETENTION_DAYS }) => {
+        if (retentionDays === 0) return purgeByTab(db, tabId);
+        return undefined;
+      })
+      .catch((error) => console.error('[wisp] purgeByTab', error));
   });
 
   chrome.tabs.onActivated.addListener(({ tabId }) => {

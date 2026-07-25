@@ -2,6 +2,9 @@ import React, { useEffect, useState } from 'react';
 import { selectSummaryContext } from '../../../core/extract/summaryContext';
 import { truncateForContext } from '../../../core/extract/truncate';
 import { isCtxCurrent } from '../../../core/panel/taskGuard';
+import { appendMessage } from '../../../core/storage/cleanup';
+import { DAY_MS, db, DEFAULT_RETENTION_DAYS } from '../../../core/storage/db';
+import type { TaskContext, Uuid } from '../../../core/messaging/types';
 import type { TaskHistoryEntry, TaskType } from '../store';
 import { usePanelStore } from '../store';
 import type { usePageChannel } from '../usePageChannel';
@@ -120,6 +123,53 @@ function getPageHost(url: string): string {
   }
 }
 
+function getPageLocation(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname.replace(/^www\./, '')}${parsed.pathname}`;
+  } catch {
+    return url;
+  }
+}
+
+async function ensureSession(
+  page: { title: string },
+  ctx: TaskContext,
+): Promise<Uuid | null> {
+  if (chrome.extension.inIncognitoContext) return null;
+
+  const existing = await db.sessions.where('tabId').equals(ctx.tabId).first();
+  if (existing?.url === ctx.url) return existing.id;
+
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const { retentionDays = DEFAULT_RETENTION_DAYS } = await chrome.storage.local.get('retentionDays');
+  await db.sessions.add({
+    id,
+    tabId: ctx.tabId,
+    url: ctx.url,
+    title: page.title,
+    incognito: false,
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: now + (retentionDays === 0 ? DAY_MS : retentionDays * DAY_MS),
+  });
+  return id;
+}
+
+async function persistGeneration(
+  page: { title: string },
+  ctx: TaskContext,
+  taskType: TaskType,
+  userContent: string,
+  assistantContent: string,
+): Promise<void> {
+  const sessionId = await ensureSession(page, ctx);
+  if (!sessionId) return;
+  await appendMessage(db, sessionId, 'user', userContent, taskType);
+  await appendMessage(db, sessionId, 'assistant', assistantContent, taskType);
+}
+
 function prepareGenerationContext(taskType: TaskType, text: string): {
   text: string;
   chars: number;
@@ -192,7 +242,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
   const handleGenerateSummary = async () => {
     if (!page) return;
     const context = prepareGenerationContext('summary', page.text);
-    await runGeneration({
+    const result = await runGeneration({
       taskType: 'summary',
       untrustedData: context.text,
       maxNewTokens: SUMMARY_MAX_NEW_TOKENS,
@@ -200,6 +250,10 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
       ctx: page.ctx,
       source: page.title,
     });
+    if (result?.status === 'success') {
+      await persistGeneration(page, page.ctx, 'summary', '生成摘要', result.content)
+        .catch((error) => console.error('[wisp] persist summary', error));
+    }
   };
 
   const handleSendQa = async () => {
@@ -207,7 +261,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
     const input = qaInput.trim();
     const context = prepareGenerationContext('qa', page.text);
     setQaInput('');
-    await runGeneration({
+    const result = await runGeneration({
       taskType: 'qa',
       untrustedData: context.text,
       userInput: input,
@@ -216,6 +270,10 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
       ctx: page.ctx,
       source: page.title,
     });
+    if (result?.status === 'success') {
+      await persistGeneration(page, page.ctx, 'qa', input, result.content)
+        .catch((error) => console.error('[wisp] persist qa', error));
+    }
   };
 
   const handleCopyOutput = async () => {
@@ -232,7 +290,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
   const handleRegenerate = async () => {
     if (!currentTask || !page || isHistoricalResult) return;
     const context = prepareGenerationContext(currentTask.type, page.text);
-    await runGeneration({
+    const result = await runGeneration({
       taskType: currentTask.type,
       untrustedData: context.text,
       userInput: currentTask.userInput,
@@ -244,6 +302,15 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
       source: page.title,
       archivePrevious: false,
     });
+    if (result?.status === 'success') {
+      await persistGeneration(
+        page,
+        page.ctx,
+        currentTask.type,
+        currentTask.userInput ?? '生成摘要',
+        result.content,
+      ).catch((error) => console.error('[wisp] persist regeneration', error));
+    }
   };
 
   return (
@@ -337,6 +404,11 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
             </aside>
 
             <div className="wisp-result-main">
+              {isHistoricalResult && currentTask ? (
+                <div className="wisp-result-origin" role="status">
+                  本结果来自：{getPageLocation(currentTask.ctx.url)}
+                </div>
+              ) : null}
               <header className="wisp-result-header">
                 <span className="wisp-result-source" title={currentTask?.source}>
                   {currentTask

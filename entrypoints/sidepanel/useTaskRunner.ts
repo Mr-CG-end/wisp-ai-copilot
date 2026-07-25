@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import * as Comlink from 'comlink';
 import { useInferenceContext } from './InferenceProvider';
-import { usePanelStore } from './store';
+import { usePanelStore, type AsyncStatus } from './store';
 import { isCtxCurrent } from '../../core/panel/taskGuard';
 import type { GenerateRequest, Lang, SelectionAction, Uuid } from '../../core/inference/contract';
 import type { TaskContext } from '../../core/messaging/types';
@@ -19,6 +19,20 @@ export interface RunOptions {
   source: string;
   archivePrevious?: boolean;
   contextChars?: number;
+}
+
+export interface GenerationRunResult {
+  taskId: Uuid;
+  status: 'success' | 'empty' | 'cancelled' | 'error';
+  content: string;
+}
+
+function toGenerationResultStatus(
+  status: AsyncStatus,
+): GenerationRunResult['status'] {
+  return status === 'success' || status === 'empty' || status === 'cancelled'
+    ? status
+    : 'error';
 }
 
 export function useTaskRunner() {
@@ -83,7 +97,7 @@ export function useTaskRunner() {
       const boundCtx = usePanelStore.getState().boundCtx;
       if (!isCtxCurrent(options.ctx, boundCtx)) {
         console.warn('[wisp] task target ctx is not current boundCtx');
-        return;
+        return null;
       }
 
       if (activeSignalIdRef.current) {
@@ -158,6 +172,13 @@ export function useTaskRunner() {
             retryable: true,
           });
         }
+        const completed = usePanelStore.getState();
+        if (completed.currentTask?.id !== signalId) return null;
+        return {
+          taskId: signalId,
+          status: toGenerationResultStatus(completed.currentTask.status),
+          content: completed.streamBuffer,
+        } satisfies GenerationRunResult;
       } catch (e: unknown) {
         console.error('[wisp] generate error:', e);
         flushPendingStream(signalId);
@@ -176,6 +197,13 @@ export function useTaskRunner() {
             retryable: true,
           });
         }
+        const failed = usePanelStore.getState();
+        if (failed.currentTask?.id !== signalId) return null;
+        return {
+          taskId: signalId,
+          status: toGenerationResultStatus(failed.currentTask.status),
+          content: failed.streamBuffer,
+        } satisfies GenerationRunResult;
       } finally {
         if (activeSignalIdRef.current === signalId) {
           activeSignalIdRef.current = null;
