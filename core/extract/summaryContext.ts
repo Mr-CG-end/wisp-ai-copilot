@@ -14,6 +14,18 @@ function isLikelyHeading(paragraph: string): boolean {
   return paragraph.length <= 72 && HEADING_PATTERN.test(paragraph);
 }
 
+/**
+ * 正文段落的最小长度。短于此又不是标题的行——裸标识符、导航项、单词列表项——
+ * 对摘要没有任何贡献，却会在预算接近用满时被大量塞进来：那时只有短行还塞得下。
+ * 实测一篇 2728 字的文档页，无论预算取 1000 / 1400 / 2000，都有约三分之一的
+ * 预算被这类碎片占据，模型收到一堆孤立词条后会把摘要写成术语表。
+ */
+const MIN_BODY_CHARS = 24;
+
+function isEligibleBody(paragraph: string): boolean {
+  return paragraph.length >= MIN_BODY_CHARS || isLikelyHeading(paragraph);
+}
+
 function sampleEvenly(indices: number[], limit: number): number[] {
   if (indices.length <= limit) return indices;
   if (limit <= 1) return [indices[0]];
@@ -59,6 +71,9 @@ export function selectSummaryContext(
   const headingIndices = allIndices.filter((index) => isLikelyHeading(paragraphs[index]));
   const sampledHeadings = sampleEvenly(headingIndices, 10);
   const sampledBody = sampleEvenly(allIndices, 12);
+  // 只有首段与末段按位置豁免长度门槛——文章的导语与结论即使很短也承载主旨。
+  // 第二段不豁免：页面以标题开头时它往往只是标题后的第一个短行。
+  const anchorSet = new Set([0, paragraphs.length - 1]);
   const priorities = [
     0,
     1,
@@ -73,8 +88,9 @@ export function selectSummaryContext(
   let used = 0;
   for (const index of priorities) {
     if (index < 0 || index >= paragraphs.length || selected.has(index)) continue;
-    const separatorCost = selected.size === 0 ? 0 : 2;
     const paragraph = paragraphs[index];
+    if (!anchorSet.has(index) && !isEligibleBody(paragraph)) continue;
+    const separatorCost = selected.size === 0 ? 0 : 2;
     if (used + separatorCost + paragraph.length > budget) continue;
     selected.add(index);
     used += separatorCost + paragraph.length;

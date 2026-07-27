@@ -26,6 +26,35 @@ describe('selectSummaryContext', () => {
     expect(result.text.length).toBeLessThanOrEqual(620);
   });
 
+  it('裸标识符等短行不占用摘要预算', () => {
+    // docs 站点的典型形状：小节标题后跟一串一行一个的标识符。
+    // 这些行既短又无语义，若被选进 material，模型会把摘要写成术语表。
+    const text = Array.from({ length: 8 }, (_, i) => [
+      `## 第 ${i + 1} 节 流程装配`,
+      `checkout_flow_${i + 1}`,
+      `cassia_${i + 1}`,
+      `integration_${i + 1}`,
+      `第 ${i + 1} 节正文说明了装配细节与常见误用${'，以及配套的约束条件'.repeat(6)}。`,
+    ].join('\n')).join('\n');
+
+    const result = selectSummaryContext(text, 1000);
+
+    expect(result.compressed).toBe(true);
+    expect(result.text).not.toContain('checkout_flow_');
+    expect(result.text).not.toContain('cassia_');
+    expect(result.text).not.toContain('integration_');
+    // 标题保留（它表达文档结构），正文保留
+    expect(result.text).toContain('## 第 1 节 流程装配');
+    expect(result.text).toContain('节正文说明了装配细节');
+  });
+
+  it('通篇都是短行时仍产出内容，不返回空', () => {
+    const text = Array.from({ length: 40 }, (_, i) => `条目${i + 1}`).join('\n');
+    const result = selectSummaryContext(text, 60);
+    expect(result.text.length).toBeGreaterThan(0);
+    expect(result.selectedChars).toBeGreaterThan(0);
+  });
+
   it('相同输入始终得到相同选择结果', () => {
     const text = Array.from({ length: 40 }, (_, index) => (
       `${index + 1}. 标题\n第 ${index + 1} 段内容${'文'.repeat(60)}`
