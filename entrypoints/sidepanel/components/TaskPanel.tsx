@@ -7,107 +7,26 @@ import {
   selectProfileAfterSample,
   type PerformanceConfig,
 } from '../../../core/panel/performance';
+import { selectTurns } from '../../../core/panel/thread';
 import { appendMessage } from '../../../core/storage/cleanup';
 import { DAY_MS, db, DEFAULT_RETENTION_DAYS } from '../../../core/storage/db';
 import type { TaskContext, Uuid } from '../../../core/messaging/types';
-import type { TaskHistoryEntry, TaskType } from '../store';
+import type { TaskType } from '../store';
 import { usePanelStore } from '../store';
 import type { usePageChannel } from '../usePageChannel';
 import { useTaskRunner, type GenerationRunResult } from '../useTaskRunner';
-import { StreamMarkdown } from './StreamMarkdown';
+import { SnapshotStamp } from './SnapshotStamp';
+import { TurnView } from './Turn';
 
 interface TaskPanelProps {
   pageChannel: ReturnType<typeof usePageChannel>;
 }
-
-const TASK_LABELS: Record<TaskType, string> = {
-  summary: '摘要',
-  qa: '追问',
-  explain: '解释',
-  summarize: '总结',
-  translate: '翻译',
-  rewrite: '改写',
-};
-
-const GenerationPrelude: React.FC<{ sourceChars: number }> = ({ sourceChars }) => {
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-
-  useEffect(() => {
-    const startedAt = Date.now();
-    const timer = window.setInterval(() => {
-      setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  return (
-    <div className="wisp-generation-prelude" role="status">
-      <strong>正在阅读 {sourceChars.toLocaleString()} 字页面快照</strong>
-      <span>
-        {elapsedSeconds < 4
-          ? '本地模型正在组织要点，首段内容生成后会立即显示。'
-          : `本地推理已进行 ${elapsedSeconds} 秒，可随时停止。`}
-      </span>
-    </div>
-  );
-};
-
-/**
- * 流式输出本身已是逐步到达的，不再叠加逐帧动画：既避免渲染出未经解析的
- * Markdown 源码（StreamMarkdown 是模型输出唯一渲染出口），也免去每帧一次的
- * 文本块重排——面板与宿主网页共用同一个 GPU 进程做合成。
- */
-const ProgressiveOutput: React.FC<{
-  content: string;
-  complete: boolean;
-  sourceChars: number;
-}> = ({ content, complete, sourceChars }) => {
-  if (!content) return <GenerationPrelude sourceChars={sourceChars} />;
-  return (
-    <div className="wisp-progressive-output">
-      <StreamMarkdown content={content} />
-      {complete ? null : <span className="wisp-cursor" aria-hidden="true" />}
-    </div>
-  );
-};
-
-const ConversationHistory = React.memo(function ConversationHistory({
-  entries,
-}: {
-  entries: TaskHistoryEntry[];
-}) {
-  if (entries.length === 0) return null;
-  return (
-    <div className="wisp-conversation-history" aria-label="之前的对话">
-      {entries.map((entry) => (
-        <article className="wisp-history-turn" key={entry.id}>
-          <header>
-            <span>{TASK_LABELS[entry.type]}</span>
-            <span title={entry.source}>{entry.source}</span>
-          </header>
-          {entry.userInput ? <div className="wisp-question-text">{entry.userInput}</div> : null}
-          <StreamMarkdown content={entry.output} />
-          {entry.truncated ? <div className="wisp-truncated-note">该回答达到长度上限</div> : null}
-        </article>
-      ))}
-    </div>
-  );
-});
 
 function getPageHost(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, '');
   } catch {
     return '当前页面';
-  }
-}
-
-function getPageLocation(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.hostname.replace(/^www\./, '')}${parsed.pathname}`;
-  } catch {
-    return url;
   }
 }
 
@@ -177,7 +96,6 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
   const currentTask = usePanelStore((s) => s.currentTask);
   const streamBuffer = usePanelStore((s) => s.streamBuffer);
   const history = usePanelStore((s) => s.history);
-  const error = usePanelStore((s) => s.error);
   const performanceProfile = usePanelStore((s) => s.performanceProfile);
   const setPerformanceProfile = usePanelStore((s) => s.setPerformanceProfile);
   const setPage = usePanelStore((s) => s.setPage);
@@ -187,11 +105,23 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   const performanceConfig = PERFORMANCE_CONFIGS[performanceProfile];
 
+  const turns = selectTurns(history, currentTask, streamBuffer);
+  const [now, setNow] = useState(() => Date.now());
+
+  // 凭证的相对时刻每 30s 刷新一次；只更新一个数字，不触发生成链路
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const isCrossTab = Boolean(activeTab && boundCtx && activeTab.tabId !== boundCtx.tabId);
   const isGenerating = currentTask?.status === 'loading';
   const isHistoricalResult = Boolean(currentTask && page && !isCtxCurrent(currentTask.ctx, page.ctx));
   const pageHost = page ? getPageHost(page.url) : '';
-  const taskLabel = currentTask ? TASK_LABELS[currentTask.type] : '结果';
+
+  // 快照过期 = 绑定页已导航或刷新（epoch 已变）；
+  // 跨标签只是当前不在那个标签，快照仍然有效，由既有横幅表达，不动凭证。
+  const isSnapshotStale = Boolean(page && boundCtx && page.ctx.epoch !== boundCtx.epoch);
 
   // 自动切换不弹提示，只更新顶栏文本。
   const calibratePerformance = (result: GenerationRunResult | null) => {
@@ -279,15 +209,15 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
     }
   };
 
-  const handleCopyOutput = async () => {
-    if (!streamBuffer) return;
+  const handleCopyOutput = async (content: string) => {
+    if (!content) return;
     try {
-      await navigator.clipboard.writeText(streamBuffer);
+      await navigator.clipboard.writeText(content);
       setCopyNotice('已复制');
     } catch {
       setCopyNotice('复制失败');
     }
-    window.setTimeout(() => setCopyNotice(null), 2000);
+    window.setTimeout(() => setCopyNotice(null), 1600);
   };
 
   const handleRegenerate = async () => {
@@ -344,19 +274,22 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
         </div>
       ) : null}
 
-      <section className="wisp-page-bar" aria-label="页面快照">
-        {page ? (
-          <>
-            <div className="wisp-page-rail" aria-hidden="true">
-              <span className="wisp-favicon-placeholder">{pageHost.charAt(0).toUpperCase()}</span>
-              <span className="wisp-source-track" />
-            </div>
+      {page ? (
+        <>
+          {/* 常驻凭证行：必须是 .wisp-task-panel 的直接子元素，sticky 的包含块才是整个面板 */}
+          <div className="wisp-snapshot-header">
+            <SnapshotStamp
+              host={pageHost}
+              readAt={page.readAt}
+              now={now}
+              stale={isSnapshotStale}
+            />
+            <div className="wisp-snapshot-host">{pageHost}</div>
+          </div>
+
+          <div className="wisp-page-detail">
+            <div />
             <div className="wisp-page-info">
-              <div className="wisp-page-eyebrow">
-                <span>{pageHost}</span>
-                <span aria-hidden="true">·</span>
-                <span>刚刚读取</span>
-              </div>
               <h2 className="wisp-page-title" title={page.title}>{page.title}</h2>
               <div className="wisp-page-meta">
                 <span>{page.charCount.toLocaleString()} 字</span>
@@ -371,148 +304,48 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
                 </button>
               </div>
             </div>
-          </>
-        ) : (
-          <div className="wisp-page-empty">
-            <div>
-              <strong>读取一份页面快照</strong>
-              <span>只在你点击后提取正文，不会持续监视网页。</span>
-            </div>
-            <button className="wisp-btn wisp-btn-primary" onClick={() => void handleReadActivePage()}>
-              读取当前页
-            </button>
           </div>
-        )}
-      </section>
 
-      {page ? (
-        <>
+          {/*
+            唯一的 live region：只播报状态短语，不挂在正文容器上。
+            流式正文若挂 live region，每次 flush 都会触发一次读屏播报。
+          */}
+          <div className="wisp-sr-live" role="status" aria-live="polite">
+            {copyNotice ?? (isGenerating ? '正在生成' : currentTask?.status === 'success' ? '生成完成' : '')}
+          </div>
+
           <div className="wisp-action-bar" aria-label="页面操作">
             <button
-              className="wisp-btn wisp-btn-primary"
+              className={`wisp-btn ${turns.length === 0 ? 'wisp-btn-primary' : 'wisp-btn-secondary'}`}
               disabled={isGenerating}
               onClick={() => void handleGenerateSummary()}
             >
               生成摘要
             </button>
+            {copyNotice ? <span className="wisp-notice-pop" aria-hidden="true">{copyNotice}</span> : null}
           </div>
 
-          <section
-            className="wisp-result-section"
-            aria-label="模型输出"
-            aria-live="polite"
-            aria-busy={isGenerating}
-          >
-            <aside className="wisp-result-note" aria-hidden="true">
-              <span className="wisp-note-number">01</span>
-              <span>{taskLabel}</span>
-            </aside>
-
-            <div className="wisp-result-main">
-              {isHistoricalResult && currentTask ? (
-                <div className="wisp-result-origin" role="status">
-                  本结果来自：{getPageLocation(currentTask.ctx.url)}
-                </div>
-              ) : null}
-              <header className="wisp-result-header">
-                <span className="wisp-result-source" title={currentTask?.source}>
-                  {currentTask
-                    ? `${currentTask.source}${isHistoricalResult ? ' · 历史结果' : ''}`
-                    : '等待生成'}
-                </span>
-
-                {isGenerating ? (
-                  <button
-                    className="wisp-btn-sm wisp-btn-danger"
-                    disabled={isStopping}
-                    onClick={() => void stop()}
-                  >
-                    {isStopping ? '正在停止…' : '停止'}
-                  </button>
-                ) : streamBuffer ? (
-                  <div className="wisp-result-tools">
-                    {copyNotice ? <span className="wisp-notice-pop" role="status">{copyNotice}</span> : null}
-                    <button className="wisp-btn-sm" onClick={() => void handleCopyOutput()}>
-                      复制
-                    </button>
-                    <button
-                      className="wisp-btn-sm"
-                      disabled={isHistoricalResult}
-                      title={isHistoricalResult ? '请改读原页面后再重新生成' : undefined}
-                      onClick={() => void handleRegenerate()}
-                    >
-                      重新生成
-                    </button>
-                  </div>
-                ) : null}
-              </header>
-
-              <div className="wisp-result-body">
-                <ConversationHistory entries={history} />
-
-                {!currentTask ? (
-                  <div className="wisp-state-empty">
-                    <strong>生成结果会显示在这里</strong>
-                    <span>可以先生成摘要，或在下方基于快照提问。</span>
-                  </div>
-                ) : null}
-
-                {currentTask?.userInput ? (
-                  <div className="wisp-current-question">
-                    <span>你的问题</span>
-                    <p>{currentTask.userInput}</p>
-                  </div>
-                ) : null}
-
-                {currentTask?.status === 'loading' || currentTask?.status === 'success' ? (
-                  <div className="wisp-state-loading">
-                    <ProgressiveOutput
-                      key={currentTask.id}
-                      content={streamBuffer}
-                      complete={currentTask.status === 'success'}
-                      sourceChars={currentTask.contextChars ?? page.text.length}
-                    />
-                    {currentTask.status === 'success' && currentTask.truncated ? (
-                      <div className="wisp-truncated-note" role="status">
-                        回答达到长度上限，内容可能未完整结束。可以缩小问题范围后重试。
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {currentTask?.status === 'empty' ? (
-                  <div className="wisp-state-empty">
-                    <strong>模型没有返回内容</strong>
-                    <span>可以重新生成或换个问题。</span>
-                    <button className="wisp-btn-sm" onClick={() => void handleRegenerate()}>
-                      重新生成
-                    </button>
-                  </div>
-                ) : null}
-
-                {currentTask?.status === 'cancelled' ? (
-                  <div className="wisp-state-cancelled">
-                    <div className="wisp-inline-notice">已停止生成</div>
-                    {streamBuffer ? <StreamMarkdown content={streamBuffer} /> : null}
-                  </div>
-                ) : null}
-
-                {currentTask?.status === 'error' ? (
-                  <div className="wisp-state-error">
-                    <strong>生成未完成</strong>
-                    <span>{error?.message || '模型生成遇到错误。'}</span>
-                    <button
-                      className="wisp-btn-sm"
-                      disabled={isHistoricalResult}
-                      onClick={() => void handleRegenerate()}
-                    >
-                      重试
-                    </button>
-                  </div>
-                ) : null}
-              </div>
+          {turns.length === 0 ? (
+            <div className="wisp-state-empty">
+              <strong>生成结果会显示在这里</strong>
+              <span>可以先生成摘要，或在下方基于快照提问。</span>
             </div>
-          </section>
+          ) : (
+            <div className="wisp-turns">
+              {turns.map((turn) => (
+                <TurnView
+                  key={turn.id}
+                  turn={turn}
+                  isStale={turn.sourceUrl !== page.ctx.url}
+                  isStopping={isStopping}
+                  canRegenerate={turn.isCurrent && turn.sourceUrl === page.ctx.url}
+                  onCopy={() => void handleCopyOutput(turn.output)}
+                  onRegenerate={() => void handleRegenerate()}
+                  onStop={() => void stop()}
+                />
+              ))}
+            </div>
+          )}
 
           <div className="wisp-qa-area">
             <label htmlFor="wisp-qa-input">继续追问</label>
@@ -545,7 +378,17 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
             </div>
           </div>
         </>
-      ) : null}
+      ) : (
+        <div className="wisp-page-empty">
+          <div>
+            <strong>读取一份页面快照</strong>
+            <span>只在你点击后提取正文，不会持续监视网页。</span>
+          </div>
+          <button className="wisp-btn wisp-btn-primary" onClick={() => void handleReadActivePage()}>
+            读取当前页
+          </button>
+        </div>
+      )}
     </div>
   );
 };
