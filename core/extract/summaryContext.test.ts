@@ -48,6 +48,27 @@ describe('selectSummaryContext', () => {
     expect(result.text).toContain('节正文说明了装配细节');
   });
 
+  it('长文中开头主旨不被跨全文采样的小节标题挤出', () => {
+    // 主旨落在第 3 段——不在 [0, 1, 末段] 这三个位置锚点上，只能靠开头预留拿到。
+    // 复现条件（缺一不可）：标题后紧跟长正文，采样层的 +1 邻居才会把预算吃到
+    // 只剩十几字的缝隙；于是 6 字的小节标题挤得进，59 字的主旨段挤不进。
+    const lead = [
+      '第 10 章 快速上手与 HelloWorld',
+      '本章课程目标：',
+      '完成从环境准备到第一次成功调用的闭环，重点是理解接入模型所必需的调用三件套这一组信息，以及它们各自在请求链路中的作用。',
+      '会运行并理解本章全部案例：环境检查、最小示例、多模型共存、企业级封装与流式输出，为后续章节打基础。',
+    ];
+    const sections = Array.from({ length: 40 }, (_, i) => [
+      `${i + 1}、章节标题`,
+      `第 ${i + 1} 节正文${'，展开实现细节与注意事项'.repeat(16)}。`,
+    ].join('\n'));
+
+    const result = selectSummaryContext([...lead, ...sections].join('\n'), 1000);
+
+    expect(result.compressed).toBe(true);
+    expect(result.text).toContain('调用三件套');
+  });
+
   it('通篇都是短行时仍产出内容，不返回空', () => {
     const text = Array.from({ length: 40 }, (_, i) => `条目${i + 1}`).join('\n');
     const result = selectSummaryContext(text, 60);

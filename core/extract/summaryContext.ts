@@ -22,6 +22,16 @@ function isLikelyHeading(paragraph: string): boolean {
  */
 const MIN_BODY_CHARS = 24;
 
+/**
+ * 预算中优先留给文章开头的比例。
+ *
+ * 开头是主旨最稳定的位置（抽取式摘要里著名的 lead baseline，很难被复杂算法超越）。
+ * 而按标题均匀采样在长文里会反噬：一篇 2 万字教程能采出十几个小节标题，光标题就把
+ * 预算吃光，开头的「本章目标」一段都进不来，模型只能拿着一份目录去猜文章讲什么。
+ * 先按文档顺序吃掉开头，剩下的预算再交给采样。
+ */
+const LEAD_BUDGET_RATIO = 0.4;
+
 function isEligibleBody(paragraph: string): boolean {
   return paragraph.length >= MIN_BODY_CHARS || isLikelyHeading(paragraph);
 }
@@ -86,6 +96,21 @@ export function selectSummaryContext(
 
   const selected = new Set<number>();
   let used = 0;
+
+  // 第一阶段：从文档开头依次取段，占用不超过 LEAD_BUDGET_RATIO 的预算。
+  // 长度门槛照样生效——否则页面若以一串标识符开头，碎片会从这个口子回来。
+  // 预算用尽即 break（而非 continue），避免又退化成「从全文挑短句」。
+  const leadBudget = Math.floor(budget * LEAD_BUDGET_RATIO);
+  for (let index = 0; index < paragraphs.length; index += 1) {
+    const paragraph = paragraphs[index];
+    if (index !== 0 && !isEligibleBody(paragraph)) continue;
+    const cost = (selected.size === 0 ? 0 : 2) + paragraph.length;
+    if (used + cost > leadBudget) break;
+    selected.add(index);
+    used += cost;
+  }
+
+  // 第二阶段：剩余预算按原优先级采样，覆盖全文结构。
   for (const index of priorities) {
     if (index < 0 || index >= paragraphs.length || selected.has(index)) continue;
     const paragraph = paragraphs[index];
