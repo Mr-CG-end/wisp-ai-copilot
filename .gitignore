@@ -5,5 +5,5 @@ stats.html
 *.zip
 web-ext.config.ts
 
-# 抽取评测语料（真实网页快照，约百 MB），按需 clone，见 core/bench/extractionCorpus.bench.ts
+# 抽取评测语料（真实网页快照，数 MB），按需 clone，见 core/bench/extractionCorpus.bench.ts
 bench-corpus

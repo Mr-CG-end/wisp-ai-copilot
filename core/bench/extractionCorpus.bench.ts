@@ -2,7 +2,7 @@
 /**
  * 用 scrapinghub/article-extraction-benchmark 的语料评测 extractArticle。
  *
- * 语料不入库（约百 MB 的真实网页快照），目录在 .gitignore 里。**未安装时整组跳过**，
+ * 语料不入库（真实网页快照，gz 压缩后数 MB 量级），目录在 .gitignore 里。**未安装时整组跳过**，
  * 因此普通开发机上 `npm test` 不受影响。
  *
  * 单独跑：`npm run bench:extraction`。
