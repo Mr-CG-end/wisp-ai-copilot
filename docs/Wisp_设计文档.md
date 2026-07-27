@@ -526,6 +526,7 @@ interface PanelState {
     text: string;                             // 快照正文全文：生成只读它，不再触碰页面
     charCount: number; truncated: boolean;
     method: 'readability' | 'heuristic';
+    readAt: number;                           // 读取时刻，供快照凭证显示「3 分钟前读取」
   } | null;
 
   currentTask: {
