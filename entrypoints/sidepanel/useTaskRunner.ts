@@ -3,10 +3,16 @@ import * as Comlink from 'comlink';
 import { useInferenceContext } from './InferenceProvider';
 import { usePanelStore, type AsyncStatus } from './store';
 import { isCtxCurrent } from '../../core/panel/taskGuard';
-import type { GenerateRequest, Lang, SelectionAction, Uuid } from '../../core/inference/contract';
+import type {
+  GenerateRequest,
+  GenStats,
+  Lang,
+  SelectionAction,
+  Uuid,
+} from '../../core/inference/contract';
 import type { TaskContext } from '../../core/messaging/types';
 
-const STREAM_FLUSH_INTERVAL_MS = 50;
+const DEFAULT_STREAM_FLUSH_INTERVAL_MS = 60;
 
 export interface RunOptions {
   taskType: 'summary' | 'qa' | SelectionAction;
@@ -19,12 +25,15 @@ export interface RunOptions {
   source: string;
   archivePrevious?: boolean;
   contextChars?: number;
+  streamFlushIntervalMs?: number;
 }
 
 export interface GenerationRunResult {
   taskId: Uuid;
   status: 'success' | 'empty' | 'cancelled' | 'error';
   content: string;
+  stats?: GenStats;
+  maxFrameGapMs: number;
 }
 
 function toGenerationResultStatus(
@@ -33,6 +42,39 @@ function toGenerationResultStatus(
   return status === 'success' || status === 'empty' || status === 'cancelled'
     ? status
     : 'error';
+}
+
+function startFrameLagMonitor(): { stop: () => number } {
+  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+    return { stop: () => 0 };
+  }
+
+  let frameId = 0;
+  let stopped = false;
+  let lastFrameAt = performance.now();
+  let maxFrameGapMs = 0;
+  const sample = (now: number) => {
+    if (stopped) return;
+    if (document.visibilityState === 'visible') {
+      maxFrameGapMs = Math.max(maxFrameGapMs, now - lastFrameAt);
+    }
+    lastFrameAt = now;
+    frameId = window.requestAnimationFrame(sample);
+  };
+  frameId = window.requestAnimationFrame(sample);
+
+  return {
+    stop: () => {
+      if (!stopped) {
+        stopped = true;
+        window.cancelAnimationFrame(frameId);
+        if (document.visibilityState === 'visible') {
+          maxFrameGapMs = Math.max(maxFrameGapMs, performance.now() - lastFrameAt);
+        }
+      }
+      return maxFrameGapMs;
+    },
+  };
 }
 
 export function useTaskRunner() {
@@ -44,6 +86,7 @@ export function useTaskRunner() {
     text: '',
   });
   const flushTimerRef = useRef<number | null>(null);
+  const streamFlushIntervalRef = useRef(DEFAULT_STREAM_FLUSH_INTERVAL_MS);
 
   const startTask = usePanelStore((s) => s.startTask);
   const appendStream = usePanelStore((s) => s.appendStream);
@@ -72,7 +115,7 @@ export function useTaskRunner() {
     if (flushTimerRef.current === null) {
       flushTimerRef.current = window.setTimeout(() => {
         flushPendingStream(taskId);
-      }, STREAM_FLUSH_INTERVAL_MS);
+      }, streamFlushIntervalRef.current);
     }
   }, [flushPendingStream]);
 
@@ -107,6 +150,8 @@ export function useTaskRunner() {
       const signalId = crypto.randomUUID();
       activeSignalIdRef.current = signalId;
       pendingStreamRef.current = { taskId: signalId, text: '' };
+      streamFlushIntervalRef.current = options.streamFlushIntervalMs
+        ?? DEFAULT_STREAM_FLUSH_INTERVAL_MS;
 
       startTask(
         {
@@ -133,6 +178,7 @@ export function useTaskRunner() {
         },
       };
 
+      const frameLagMonitor = startFrameLagMonitor();
       try {
         const api = getApi();
         const stats = await api.generate(
@@ -178,6 +224,8 @@ export function useTaskRunner() {
           taskId: signalId,
           status: toGenerationResultStatus(completed.currentTask.status),
           content: completed.streamBuffer,
+          stats,
+          maxFrameGapMs: frameLagMonitor.stop(),
         } satisfies GenerationRunResult;
       } catch (e: unknown) {
         console.error('[wisp] generate error:', e);
@@ -203,8 +251,10 @@ export function useTaskRunner() {
           taskId: signalId,
           status: toGenerationResultStatus(failed.currentTask.status),
           content: failed.streamBuffer,
+          maxFrameGapMs: frameLagMonitor.stop(),
         } satisfies GenerationRunResult;
       } finally {
+        frameLagMonitor.stop();
         if (activeSignalIdRef.current === signalId) {
           activeSignalIdRef.current = null;
           if (flushTimerRef.current !== null) {

@@ -7,10 +7,13 @@ import { TaskPanel } from './components/TaskPanel';
 export function App() {
   const modelStatus = usePanelStore((s) => s.modelStatus);
   const modelBackend = usePanelStore((s) => s.modelBackend);
+  const performanceProfile = usePanelStore((s) => s.performanceProfile);
   const pageChannel = usePageChannel();
   const isReady = modelStatus === 'ready';
+  // 只在偏离默认时发声：均衡档不显示第三段，顶栏保持安静。
+  const profileLabel = performanceProfile === 'resource-saver' ? ' · 省资源' : '';
   const statusLabel = isReady
-    ? `本地 · ${modelBackend === 'wasm' ? 'WASM' : 'WebGPU'}`
+    ? `本地 · ${modelBackend === 'wasm' ? 'WASM' : 'WebGPU'}${profileLabel}`
     : modelStatus === 'checking-cache' || modelStatus === 'loading'
       ? '正在恢复'
       : modelStatus === 'downloading'

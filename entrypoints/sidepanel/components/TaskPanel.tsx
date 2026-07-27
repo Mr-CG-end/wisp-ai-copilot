@@ -2,13 +2,18 @@ import React, { useEffect, useState } from 'react';
 import { selectSummaryContext } from '../../../core/extract/summaryContext';
 import { truncateForContext } from '../../../core/extract/truncate';
 import { isCtxCurrent } from '../../../core/panel/taskGuard';
+import {
+  PERFORMANCE_CONFIGS,
+  selectProfileAfterSample,
+  type PerformanceConfig,
+} from '../../../core/panel/performance';
 import { appendMessage } from '../../../core/storage/cleanup';
 import { DAY_MS, db, DEFAULT_RETENTION_DAYS } from '../../../core/storage/db';
 import type { TaskContext, Uuid } from '../../../core/messaging/types';
 import type { TaskHistoryEntry, TaskType } from '../store';
 import { usePanelStore } from '../store';
 import type { usePageChannel } from '../usePageChannel';
-import { useTaskRunner } from '../useTaskRunner';
+import { useTaskRunner, type GenerationRunResult } from '../useTaskRunner';
 import { StreamMarkdown } from './StreamMarkdown';
 
 interface TaskPanelProps {
@@ -23,9 +28,6 @@ const TASK_LABELS: Record<TaskType, string> = {
   translate: '翻译',
   rewrite: '改写',
 };
-
-const SUMMARY_MAX_NEW_TOKENS = 384;
-const QA_MAX_NEW_TOKENS = 512;
 
 const GenerationPrelude: React.FC<{ sourceChars: number }> = ({ sourceChars }) => {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -50,44 +52,21 @@ const GenerationPrelude: React.FC<{ sourceChars: number }> = ({ sourceChars }) =
   );
 };
 
+/**
+ * 流式输出本身已是逐步到达的，不再叠加逐帧动画：既避免渲染出未经解析的
+ * Markdown 源码（StreamMarkdown 是模型输出唯一渲染出口），也免去每帧一次的
+ * 文本块重排——面板与宿主网页共用同一个 GPU 进程做合成。
+ */
 const ProgressiveOutput: React.FC<{
   content: string;
   complete: boolean;
   sourceChars: number;
 }> = ({ content, complete, sourceChars }) => {
-  const [visibleLength, setVisibleLength] = useState(0);
-
-  useEffect(() => {
-    if (!content) return;
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      setVisibleLength(content.length);
-      return;
-    }
-
-    let frame = 0;
-    let currentLength = visibleLength;
-    const tick = () => {
-      const remaining = content.length - currentLength;
-      if (remaining <= 0) return;
-      const step = remaining > 80 ? 10 : remaining > 24 ? 5 : 2;
-      currentLength = Math.min(content.length, currentLength + step);
-      setVisibleLength(currentLength);
-      if (currentLength < content.length) {
-        frame = window.requestAnimationFrame(tick);
-      }
-    };
-    frame = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(frame);
-  }, [content]);
-
   if (!content) return <GenerationPrelude sourceChars={sourceChars} />;
-  if (complete && visibleLength >= content.length) {
-    return <StreamMarkdown content={content} />;
-  }
   return (
     <div className="wisp-progressive-output">
-      <span className="wisp-stream-text">{content.slice(0, visibleLength)}</span>
-      <span className="wisp-cursor" aria-hidden="true" />
+      <StreamMarkdown content={content} />
+      {complete ? null : <span className="wisp-cursor" aria-hidden="true" />}
     </div>
   );
 };
@@ -170,15 +149,19 @@ async function persistGeneration(
   await appendMessage(db, sessionId, 'assistant', assistantContent, taskType);
 }
 
-function prepareGenerationContext(taskType: TaskType, text: string): {
+function prepareGenerationContext(
+  taskType: TaskType,
+  text: string,
+  config: PerformanceConfig,
+): {
   text: string;
   chars: number;
 } {
   if (taskType === 'summary') {
-    const context = selectSummaryContext(text);
+    const context = selectSummaryContext(text, config.summaryContextChars);
     return { text: context.text, chars: context.selectedChars };
   }
-  const context = truncateForContext(text);
+  const context = truncateForContext(text, config.qaContextChars);
   return { text: context.text, chars: context.keptChars };
 }
 
@@ -195,17 +178,31 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
   const streamBuffer = usePanelStore((s) => s.streamBuffer);
   const history = usePanelStore((s) => s.history);
   const error = usePanelStore((s) => s.error);
+  const performanceProfile = usePanelStore((s) => s.performanceProfile);
+  const setPerformanceProfile = usePanelStore((s) => s.setPerformanceProfile);
   const setPage = usePanelStore((s) => s.setPage);
 
   const { runGeneration, stop, isStopping } = useTaskRunner();
   const [qaInput, setQaInput] = useState('');
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const performanceConfig = PERFORMANCE_CONFIGS[performanceProfile];
 
   const isCrossTab = Boolean(activeTab && boundCtx && activeTab.tabId !== boundCtx.tabId);
   const isGenerating = currentTask?.status === 'loading';
   const isHistoricalResult = Boolean(currentTask && page && !isCtxCurrent(currentTask.ctx, page.ctx));
   const pageHost = page ? getPageHost(page.url) : '';
   const taskLabel = currentTask ? TASK_LABELS[currentTask.type] : '结果';
+
+  // 自动切换不弹提示，只更新顶栏文本。
+  const calibratePerformance = (result: GenerationRunResult | null) => {
+    const stats = result?.stats;
+    if (!stats) return;
+    setPerformanceProfile(selectProfileAfterSample(performanceProfile, {
+      ttftMs: stats.ttftMs,
+      tokensPerSec: stats.tokensPerSec,
+      maxFrameGapMs: result.maxFrameGapMs,
+    }));
+  };
 
   const handleReadActivePage = async () => {
     if (isGenerating) await stop();
@@ -241,15 +238,17 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
 
   const handleGenerateSummary = async () => {
     if (!page) return;
-    const context = prepareGenerationContext('summary', page.text);
+    const context = prepareGenerationContext('summary', page.text, performanceConfig);
     const result = await runGeneration({
       taskType: 'summary',
       untrustedData: context.text,
-      maxNewTokens: SUMMARY_MAX_NEW_TOKENS,
+      maxNewTokens: performanceConfig.summaryMaxNewTokens,
       contextChars: context.chars,
+      streamFlushIntervalMs: performanceConfig.streamFlushIntervalMs,
       ctx: page.ctx,
       source: page.title,
     });
+    calibratePerformance(result);
     if (result?.status === 'success') {
       await persistGeneration(page, page.ctx, 'summary', '生成摘要', result.content)
         .catch((error) => console.error('[wisp] persist summary', error));
@@ -259,17 +258,19 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
   const handleSendQa = async () => {
     if (!page || !qaInput.trim() || isGenerating) return;
     const input = qaInput.trim();
-    const context = prepareGenerationContext('qa', page.text);
+    const context = prepareGenerationContext('qa', page.text, performanceConfig);
     setQaInput('');
     const result = await runGeneration({
       taskType: 'qa',
       untrustedData: context.text,
       userInput: input,
-      maxNewTokens: QA_MAX_NEW_TOKENS,
+      maxNewTokens: performanceConfig.qaMaxNewTokens,
       contextChars: context.chars,
+      streamFlushIntervalMs: performanceConfig.streamFlushIntervalMs,
       ctx: page.ctx,
       source: page.title,
     });
+    calibratePerformance(result);
     if (result?.status === 'success') {
       await persistGeneration(page, page.ctx, 'qa', input, result.content)
         .catch((error) => console.error('[wisp] persist qa', error));
@@ -289,19 +290,21 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
 
   const handleRegenerate = async () => {
     if (!currentTask || !page || isHistoricalResult) return;
-    const context = prepareGenerationContext(currentTask.type, page.text);
+    const context = prepareGenerationContext(currentTask.type, page.text, performanceConfig);
     const result = await runGeneration({
       taskType: currentTask.type,
       untrustedData: context.text,
       userInput: currentTask.userInput,
       maxNewTokens: currentTask.type === 'summary'
-        ? SUMMARY_MAX_NEW_TOKENS
-        : QA_MAX_NEW_TOKENS,
+        ? performanceConfig.summaryMaxNewTokens
+        : performanceConfig.qaMaxNewTokens,
       contextChars: context.chars,
+      streamFlushIntervalMs: performanceConfig.streamFlushIntervalMs,
       ctx: page.ctx,
       source: page.title,
       archivePrevious: false,
     });
+    calibratePerformance(result);
     if (result?.status === 'success') {
       await persistGeneration(
         page,

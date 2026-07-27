@@ -861,11 +861,6 @@ button {
   min-height: 24px;
 }
 
-.wisp-stream-text {
-  display: inline;
-  white-space: pre-wrap;
-}
-
 .wisp-conversation-history {
   margin: -16px -16px 18px;
   border-bottom: 1px solid var(--wisp-border);

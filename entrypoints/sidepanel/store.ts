@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { ErrorCode, TaskContext, Uuid } from '../../core/messaging/types';
+import type { PerformanceProfile } from '../../core/panel/performance';
 
 export type AsyncStatus =
   | 'idle'
@@ -70,6 +71,12 @@ export interface PanelStoreState {
   // 错误状态
   error: ErrorState | null;
 
+  /**
+   * 性能档位。它决定送入模型的上下文预算与输出上限，属产品状态而非短生命周期
+   * UI 状态，因此进 store —— 顶栏与任务面板都要读到同一个来源。
+   */
+  performanceProfile: PerformanceProfile;
+
   // Actions
   setModelStatus: (status: ModelStatus, error?: ErrorState | null) => void;
   setModelBackend: (backend: 'webgpu' | 'wasm' | null) => void;
@@ -82,6 +89,7 @@ export interface PanelStoreState {
   cancelTask: (taskId: Uuid) => void;
   failTask: (taskId: Uuid, error: ErrorState) => void;
   setError: (error: ErrorState | null) => void;
+  setPerformanceProfile: (profile: PerformanceProfile) => void;
   reset: () => void;
 }
 
@@ -95,6 +103,7 @@ const initialState = {
   streamBuffer: '',
   history: [],
   error: null,
+  performanceProfile: 'resource-saver' as PerformanceProfile,
 };
 
 export const usePanelStore = create<PanelStoreState>((set) => ({
@@ -183,6 +192,8 @@ export const usePanelStore = create<PanelStoreState>((set) => ({
   }),
 
   setError: (error) => set({ error }),
+
+  setPerformanceProfile: (performanceProfile) => set({ performanceProfile }),
 
   reset: () => set(initialState),
 }));

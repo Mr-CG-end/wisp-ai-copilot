@@ -37,6 +37,22 @@ describe('usePanelStore', () => {
     expect(s.streamBuffer).toBe('');
     expect(s.history).toEqual([]);
     expect(s.error).toBeNull();
+    expect(s.performanceProfile).toBe('resource-saver');
+  });
+
+  it('setPerformanceProfile 生效且不影响其他字段', () => {
+    const store = usePanelStore.getState();
+    store.setPage(samplePage);
+    store.startTask(sampleTask);
+    store.appendStream('task-1', '已生成内容');
+
+    store.setPerformanceProfile('balanced');
+
+    const s = usePanelStore.getState();
+    expect(s.performanceProfile).toBe('balanced');
+    expect(s.page?.url).toBe('https://example.com');
+    expect(s.currentTask?.id).toBe('task-1');
+    expect(s.streamBuffer).toBe('已生成内容');
   });
 
   it('startTask 会清空上一任务输出、统计和错误', () => {
