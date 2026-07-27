@@ -584,74 +584,96 @@ button {
   gap: 2px;
 }
 
-.wisp-page-bar {
-  min-height: 88px;
-  margin-inline: -16px;
-  padding: 12px 16px;
+/* 页面级 44px 轨道：三种行各自声明同一套两列栅格，而不是把 .wisp-task-panel
+   改成 grid —— sticky 元素被约束在自己的包含块内，若凭证行是某个 grid item，
+   包含块就只有那一行的高度，滚过去会跟着离场。面板保持 flex 列。 */
+.wisp-snapshot-header,
+.wisp-page-detail,
+.wisp-turn {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
-  gap: 12px;
-  background: color-mix(in srgb, var(--wisp-surface) 62%, var(--wisp-bg));
-  border-top: 1px solid var(--wisp-border);
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 0 12px;
+}
+
+/* 常驻凭证行。只 sticky 这一行：顶部固定占用 78px（顶栏 44 + 凭证行 34），
+   整条上下文栏 sticky 则要 132px。 */
+.wisp-snapshot-header {
+  position: sticky;
+  top: 44px;
+  z-index: 1;
+  margin-inline: -16px;
+  padding: 8px 16px;
+  align-items: center;
+  background: var(--wisp-bg);
   border-bottom: 1px solid var(--wisp-border);
 }
 
-.wisp-page-rail {
-  position: relative;
-  display: flex;
-  justify-content: center;
+.wisp-snapshot-host {
+  color: var(--wisp-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.wisp-favicon-placeholder {
-  position: relative;
-  z-index: 1;
+/* 标题与字数：一次性信息，随内容滚走 */
+.wisp-page-detail {
+  margin-inline: -16px;
+  padding: 10px 16px 12px;
+  border-bottom: 1px solid var(--wisp-border);
+}
+
+.wisp-stamp {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wisp-stamp-initial {
   width: 30px;
   height: 30px;
   display: grid;
   place-items: center;
-  color: var(--wisp-accent);
   background: var(--wisp-surface);
   border: 1px solid var(--wisp-border);
   border-radius: 7px;
-  font-size: 15px;
-  font-weight: 700;
+  color: var(--wisp-accent);
+  font-size: 14px;
+  font-weight: 650;
 }
 
-.wisp-source-track {
+.wisp-stamp-time {
+  color: var(--wisp-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: center;
+}
+
+.wisp-stamp.is-stale .wisp-stamp-initial {
+  border-style: dashed;
+  color: var(--wisp-text-muted);
+}
+
+/* 只播报状态短语的 live region，视觉上不占位 */
+.wisp-sr-live {
   position: absolute;
-  top: 28px;
-  bottom: -24px;
-  left: 50%;
   width: 1px;
-  background: var(--wisp-accent);
-  transform: translateX(-50%);
-}
-
-.wisp-source-track::before,
-.wisp-source-track::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  width: 5px;
-  height: 5px;
-  background: var(--wisp-accent);
-  border-radius: 50%;
-  transform: translateX(-50%);
-}
-
-.wisp-source-track::before {
-  top: 0;
-}
-
-.wisp-source-track::after {
-  bottom: 0;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .wisp-page-info {
   min-width: 0;
 }
 
-.wisp-page-eyebrow,
 .wisp-page-meta {
   display: flex;
   align-items: center;
@@ -660,11 +682,6 @@ button {
   color: var(--wisp-text-muted);
   font-size: 11px;
   line-height: 18px;
-}
-
-.wisp-page-eyebrow span:first-child {
-  color: var(--wisp-text);
-  font-weight: 600;
 }
 
 .wisp-page-title {
@@ -685,7 +702,6 @@ button {
 }
 
 .wisp-page-empty {
-  grid-column: 1 / -1;
   min-height: 62px;
   display: flex;
   align-items: center;
@@ -715,64 +731,134 @@ button {
   gap: 8px;
 }
 
-.wisp-result-section {
-  min-height: 300px;
-  display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
-  overflow: hidden;
-  background: var(--wisp-surface);
-  border: 1px solid var(--wisp-border);
-  border-radius: 10px;
-}
-
-.wisp-result-note {
-  position: relative;
-  padding: 50px 8px 12px;
-  display: flex;
-  align-items: center;
-  flex-direction: column;
-  gap: 3px;
+.wisp-notice-pop {
+  margin-right: 3px;
   color: var(--wisp-accent);
-  border-right: 1px solid var(--wisp-border);
   font-size: 11px;
-  font-weight: 650;
+  white-space: nowrap;
 }
 
-.wisp-result-note::before {
-  content: "";
+/* —— 轨迹：轮次列表 —— */
+
+.wisp-turns {
+  display: flex;
+  flex-direction: column;
+}
+
+.wisp-turn {
+  align-items: start;
+}
+
+.wisp-thread {
+  position: relative;
+  min-height: 100%;
+  padding: 10px 8px 0 0;
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 2px;
+  align-self: stretch;
+}
+
+/* 线：贯穿本轮高度，位于轨道右缘 —— 它同时是轨道与内容的分隔线 */
+.wisp-thread-line {
   position: absolute;
   top: 0;
-  left: 50%;
+  right: 0;
   width: 1px;
-  height: 40px;
+  height: 100%;
+  background: var(--wisp-accent);
+  transform-origin: top;
+}
+
+/* 节点：骑在线上 */
+.wisp-thread-node {
+  position: absolute;
+  top: 12px;
+  right: -3.5px;
+  width: 8px;
+  height: 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--wisp-accent);
+  border-radius: 50%;
   background: var(--wisp-accent);
 }
 
-.wisp-note-number {
-  font-size: 16px;
+.wisp-thread-index {
+  color: var(--wisp-accent);
+  font-size: 11px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
-  font-weight: 650;
+  line-height: 16px;
 }
 
-.wisp-result-main {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.wisp-result-origin {
-  padding: 9px 14px;
-  border-bottom: 1px solid var(--wisp-border);
-  border-left: 2px solid var(--wisp-accent);
-  background: color-mix(in srgb, var(--wisp-accent) 7%, transparent);
+.wisp-thread-type {
   color: var(--wisp-text-muted);
-  font-size: 12px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
 }
 
-.wisp-result-header {
-  min-height: 42px;
+/* 生成中：实线描边空心节点 + 线向下生长 */
+.wisp-thread--loading .wisp-thread-node {
+  background: var(--wisp-surface);
+}
+
+.wisp-thread--loading .wisp-thread-line {
+  animation: wisp-thread-grow 900ms ease-out;
+}
+
+@keyframes wisp-thread-grow {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+
+/* 空结果：虚线描边空心节点 —— 与生成中的静态形态必须可区分 */
+.wisp-thread--empty .wisp-thread-node {
+  background: var(--wisp-surface);
+  border-style: dashed;
+}
+
+/* 已停止：节点带横杠，线转虚线 */
+.wisp-thread--cancelled .wisp-thread-node::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -3px;
+  width: 12px;
+  height: 1px;
+  background: var(--wisp-surface);
+}
+
+.wisp-thread--cancelled .wisp-thread-line {
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--wisp-accent) 0 3px,
+    transparent 3px 7px
+  );
+}
+
+/* 出错：该段转暖红 */
+.wisp-thread--error .wisp-thread-node {
+  border-color: var(--wisp-danger);
+  background: var(--wisp-danger);
+}
+
+.wisp-thread--error .wisp-thread-line {
+  background: var(--wisp-danger);
+}
+
+.wisp-turn-paper {
+  min-width: 0;
+  margin: 8px 0 12px 12px;
+  background: var(--wisp-surface);
+  border: 1px solid var(--wisp-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.wisp-turn-tools {
+  min-height: 38px;
   padding: 6px 10px 6px 14px;
   display: flex;
   align-items: center;
@@ -781,7 +867,7 @@ button {
   border-bottom: 1px solid var(--wisp-border);
 }
 
-.wisp-result-source {
+.wisp-turn-source {
   min-width: 0;
   overflow: hidden;
   color: var(--wisp-text-muted);
@@ -791,27 +877,57 @@ button {
   white-space: nowrap;
 }
 
-.wisp-result-tools {
+.wisp-turn-actions {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
   gap: 2px;
 }
 
-.wisp-notice-pop {
-  margin-right: 3px;
-  color: var(--wisp-accent);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.wisp-result-body {
-  min-height: 240px;
-  padding: 16px;
+.wisp-turn-body {
+  padding: 14px;
   overflow-wrap: anywhere;
   color: var(--wisp-text);
   font-size: 14px;
-  line-height: 1.7;
+  line-height: 22px;
+}
+
+.wisp-turn-origin {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--wisp-border);
+  border-left: 2px solid var(--wisp-accent);
+  background: color-mix(in srgb, var(--wisp-accent) 7%, transparent);
+  color: var(--wisp-text-muted);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.wisp-turn-prelude {
+  color: var(--wisp-text-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.wisp-turn-question {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  background: var(--wisp-accent-soft);
+  border-radius: 7px;
+  color: var(--wisp-text);
+}
+
+.wisp-turn-question span {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--wisp-accent);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.wisp-turn-question p {
+  margin: 0;
+  font-size: 14px;
 }
 
 .wisp-state-empty,
@@ -838,117 +954,12 @@ button {
   font-size: 12px;
 }
 
-.wisp-generation-prelude {
-  min-height: 82px;
-  display: flex;
-  justify-content: center;
-  flex-direction: column;
-  gap: 5px;
-  color: var(--wisp-text-muted);
-}
-
-.wisp-generation-prelude strong {
-  color: var(--wisp-accent);
-  font-size: 13px;
-}
-
-.wisp-generation-prelude span {
-  max-width: 34ch;
-  font-size: 12px;
-}
-
-.wisp-progressive-output {
-  min-height: 24px;
-}
-
-.wisp-conversation-history {
-  margin: -16px -16px 18px;
-  border-bottom: 1px solid var(--wisp-border);
-}
-
-.wisp-history-turn {
-  padding: 14px 16px 16px;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 180px;
-}
-
-.wisp-history-turn + .wisp-history-turn {
-  border-top: 1px solid var(--wisp-border);
-}
-
-.wisp-history-turn header {
-  margin-bottom: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--wisp-text-muted);
-  font-size: 11px;
-}
-
-.wisp-history-turn header span:last-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wisp-question-text,
-.wisp-current-question {
-  margin-bottom: 12px;
-  padding: 8px 10px;
-  background: var(--wisp-accent-soft);
-  border-radius: 7px;
-  color: var(--wisp-text);
-}
-
-.wisp-question-text {
-  font-size: 13px;
-}
-
-.wisp-current-question span {
-  display: block;
-  margin-bottom: 2px;
-  color: var(--wisp-accent);
-  font-size: 10px;
-  font-weight: 650;
-}
-
-.wisp-current-question p {
-  margin: 0;
-  font-size: 13px;
-}
-
 .wisp-truncated-note {
   margin-top: 12px;
   padding-top: 10px;
   color: var(--wisp-warning);
   border-top: 1px solid var(--wisp-border);
   font-size: 11px;
-}
-
-.wisp-state-loading {
-  min-height: 180px;
-}
-
-.wisp-cursor {
-  width: 2px;
-  height: 16px;
-  display: inline-block;
-  margin-left: 2px;
-  vertical-align: -2px;
-  background: var(--wisp-accent);
-  animation: wisp-cursor-blink 900ms step-end infinite;
-}
-
-@keyframes wisp-cursor-blink {
-  50% {
-    opacity: 0;
-  }
-}
-
-.wisp-state-cancelled .wisp-inline-notice {
-  margin-bottom: 12px;
 }
 
 .wisp-qa-area {
@@ -1137,7 +1148,8 @@ button {
     padding-inline: 14px;
   }
 
-  .wisp-page-bar,
+  .wisp-snapshot-header,
+  .wisp-page-detail,
   .wisp-qa-area {
     margin-inline: -14px;
     padding-inline: 14px;
@@ -1156,23 +1168,6 @@ button {
     grid-template-columns: 1fr;
   }
 
-  .wisp-page-bar {
-    grid-template-columns: 36px minmax(0, 1fr);
-    gap: 9px;
-  }
-
-  .wisp-result-section {
-    grid-template-columns: 42px minmax(0, 1fr);
-  }
-
-  .wisp-result-note {
-    padding-inline: 4px;
-  }
-
-  .wisp-result-body {
-    padding: 14px;
-  }
-
   .wisp-btn-group {
     align-items: stretch;
     flex-direction: column;
@@ -1180,12 +1175,6 @@ button {
 
   .wisp-btn-group .wisp-btn {
     width: 100%;
-  }
-}
-
-@media (min-width: 420px) {
-  .wisp-result-body {
-    padding: 18px;
   }
 }
 
