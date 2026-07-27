@@ -13,6 +13,7 @@ import {
   writeCacheManifest,
 } from '../../../core/inference/modelCache';
 import { isCacheRestoreFailure } from '../../../core/inference/restoreFailure';
+import { selectSetupSteps } from '../../../core/panel/setupSteps';
 import type { LoadProgress } from '../../../core/inference/contract';
 
 export const MODEL_ID = 'onnx-community/Qwen3-0.6B-ONNX';
@@ -25,6 +26,25 @@ function formatAvailableBytes(bytes: number | null): string {
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
   return `${Math.max(0, Math.round(bytes / 1024 ** 2))} MB`;
 }
+
+/**
+ * 初始化四步。与任务面板的轨迹共用同一套节点语汇 ——
+ * 首次约 47 秒的等待因此变成「看得见自己在第几步」。
+ */
+const SetupThread: React.FC<{
+  status: Parameters<typeof selectSetupSteps>[0];
+  hasCache: boolean;
+}> = ({ status, hasCache }) => (
+  <ol className="wisp-setup-steps">
+    {selectSetupSteps(status, hasCache).map((step, i) => (
+      <li key={step.key} className={`wisp-setup-step is-${step.state}`}>
+        <span className="wisp-setup-step-node" aria-hidden="true" />
+        <span className="wisp-setup-step-index" aria-hidden="true">{String(i + 1).padStart(2, '0')}</span>
+        <span className="wisp-setup-step-label">{step.label}</span>
+      </li>
+    ))}
+  </ol>
+);
 
 export const ModelSetup: React.FC = () => {
   const { getApi, recreate } = useInferenceContext();
@@ -296,7 +316,7 @@ export const ModelSetup: React.FC = () => {
   if (modelStatus === 'checking-cache' || modelStatus === 'loading') {
     return (
       <section className="wisp-setup-container" aria-live="polite" aria-busy="true">
-        <div className="wisp-setup-index">00 / 本地校验</div>
+        <SetupThread status={modelStatus} hasCache={hasLegacyCache} />
         <div className="wisp-setup-panel">
           <div className="wisp-skeleton" aria-hidden="true">
             <span />
@@ -315,7 +335,7 @@ export const ModelSetup: React.FC = () => {
     const downloadedMb = Math.round(MODEL_SIZE_MB * downloadPct / 100);
     return (
       <section className="wisp-setup-container" aria-live="polite" aria-busy="true">
-        <div className="wisp-setup-index">00 / 模型下载</div>
+        <SetupThread status={modelStatus} hasCache={hasLegacyCache} />
         <div className="wisp-setup-panel">
           <p className="wisp-setup-kicker">Qwen3-0.6B</p>
           <h2 className="wisp-setup-heading">正在准备本地模型</h2>
@@ -353,7 +373,7 @@ export const ModelSetup: React.FC = () => {
   if (modelStatus === 'needs-user-choice') {
     return (
       <section className="wisp-setup-container" aria-live="polite">
-        <div className="wisp-setup-index">00 / 后端选择</div>
+        <SetupThread status={modelStatus} hasCache={hasLegacyCache} />
         <div className="wisp-setup-panel">
           <p className="wisp-setup-kicker">兼容模式</p>
           <h2 className="wisp-setup-heading">当前设备无法使用 WebGPU</h2>
@@ -376,7 +396,7 @@ export const ModelSetup: React.FC = () => {
 
   return (
     <section className="wisp-setup-container">
-      <div className="wisp-setup-index">00 / 初始化</div>
+      <SetupThread status={modelStatus} hasCache={hasLegacyCache} />
       <div className="wisp-setup-panel">
         <p className="wisp-setup-kicker">浏览器端 AI</p>
         <h1 className="wisp-setup-heading">在浏览器中运行 AI</h1>
