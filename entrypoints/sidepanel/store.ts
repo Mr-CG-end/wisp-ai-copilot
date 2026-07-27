@@ -29,6 +29,8 @@ export interface PageInfo {
   charCount: number;
   truncated: boolean;
   method: 'readability' | 'heuristic';
+  /** 快照读取时刻，供凭证显示「3 分钟前读取」 */
+  readAt: number;
 }
 
 export interface CurrentTask {

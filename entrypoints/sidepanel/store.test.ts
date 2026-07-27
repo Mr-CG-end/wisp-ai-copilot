@@ -19,6 +19,7 @@ const samplePage: PageInfo = {
   charCount: 6,
   truncated: false,
   method: 'readability',
+  readAt: 0,
 };
 
 describe('usePanelStore', () => {

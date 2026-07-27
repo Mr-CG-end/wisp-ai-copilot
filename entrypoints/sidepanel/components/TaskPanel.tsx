@@ -216,6 +216,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
       charCount: result.charCount,
       truncated: result.truncated,
       method: result.method,
+      readAt: Date.now(),
     });
     setQaInput('');
   };
@@ -233,6 +234,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
       charCount: result.charCount,
       truncated: result.truncated,
       method: result.method,
+      readAt: Date.now(),
     });
   };
 
