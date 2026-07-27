@@ -86,7 +86,14 @@ export function selectTurns(
   currentTask: TurnInput | null,
   streamBuffer: string,
 ): Turn[] {
-  const turns = history.map((entry, i) => toTurn(entry, entry.output, i + 1, false));
+  const turns: Turn[] = [];
+  // idle 在两侧都被剔除后，toTurn 里的 TurnStatus 断言才真正成立 ——
+  // 否则 STATUS_LABELS['idle'] 取到 undefined，而 statusLabel 的类型标称是 string。
+  // 编号在过滤之后才递增，跳过的条目不会在轨道上留下空号。
+  for (const entry of history) {
+    if (entry.status === 'idle') continue;
+    turns.push(toTurn(entry, entry.output, turns.length + 1, false));
+  }
   if (currentTask && currentTask.status !== 'idle') {
     turns.push(toTurn(currentTask, streamBuffer, turns.length + 1, true));
   }

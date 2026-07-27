@@ -54,6 +54,17 @@ describe('selectTurns', () => {
     expect(selectTurns([], current({ status: 'idle' }), '')).toEqual([]);
   });
 
+  it('idle 的历史条目同样被剔除，编号不留空号', () => {
+    const turns = selectTurns(
+      [history({ id: 'h1' }), history({ id: 'h2', status: 'idle' }), history({ id: 'h3' })],
+      null,
+      '',
+    );
+    expect(turns.map((t) => t.id)).toEqual(['h1', 'h3']);
+    expect(turns.map((t) => t.index)).toEqual([1, 2]);
+    expect(turns.every((t) => t.statusLabel !== undefined)).toBe(true);
+  });
+
   it('可访问名包含轮次序号、类型与状态', () => {
     const turns = selectTurns([history({ status: 'success' })], current({ status: 'cancelled' }), '半截');
     expect(turns[0].accessibleName).toBe('第 1 轮 · 摘要 · 已完成');
