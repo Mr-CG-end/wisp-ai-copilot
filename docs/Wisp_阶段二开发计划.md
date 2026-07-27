@@ -31,7 +31,9 @@
 
 | Task 1～4 (M1) | 已完成 | 单测 11/11 覆盖，Types/SW/Extract/Port 页面读取链路打通且 WXT 打包无错 |
 | Task 5～8 (M2) | 已完成 | 状态容器 (ce1f5f3) + 缓存恢复 (d1e6d52) + 安全渲染 (91f60c6) + 摘要追问 (871e69d)，单测 18/18 (91 项) 全绿，WXT 生产/开发构建均打通 |
-| Task 9～14 | 待执行 | 推进 M3 划词与数据管理 |
+| Task 9 | 已完成 | 会话存储与级联清理 (67387ea)：Dexie `sessions`/`messages` + `appendMessage` 同事务维护 `updatedAt`，隐身上下文完全跳过持久化 |
+| M2 收口 | 已完成 | 生成期渲染负载收敛与档位统一 (d9cb8f0) + 正文提取降级路径不再克隆 DOM (4c46fa4) + 设计文档契约回写；单测 24 文件 119 项全绿，`tsc --noEmit` 与 `build:dev` 均通过。详见 `Wisp_M2收口与设计文档回写计划.md` |
+| Task 10～14 | 待执行 | 推进 M3 划词与数据管理 |
 
 > 执行时每完成一个任务，在此表补一行状态与证据（沿用阶段一文档的进度同步方式）；Task 14 完成后在本节写入阶段门结论。
 
@@ -106,13 +108,15 @@
 - **性能对标**：划词工具条出现 ≤ 150ms（选区稳定后）；从点击工具条到 Side Panel 显示任务状态 ≤ 500ms；正文提取一次性耗时 ≤ 1s（超 `MAX_DOM_NODES` 走启发式）；生成侧指标沿用阶段一已达标值。
 - **Git**：提交**不加 `Co-Authored-By` 尾行**，作者为仓库配置的 `Mr-CG-end`；频繁小步提交。
 
-### 2.1 与设计文档 v0.2 的有意偏差（三处，需在阶段末回写设计文档）
+### 2.1 与设计文档 v0.2 的有意偏差（三处，**均已回写**）
 
-| # | 设计文档原文 | 本计划做法 | 理由 |
-|---|---|---|---|
-| B1 | §2.1 `BackgroundToPanel.ACTIVE_TAB` 带 `url` | `ACTIVE_TAB` 只带 `{tabId, epoch}`，`url` 由 Content Script 在 `EXTRACTED`/`SELECTION` 中回传 | 读取 `tab.url` 需要 `tabs` 权限或 host 权限，与 §8.1「v0.1 不申请 `<all_urls>`」冲突。URL 由已注入页面的 CS 用 `location.href` 提供，权限更小且更准确 |
-| B2 | §3.1 用 `webNavigation.onCommitted` 触发 `epoch++` | 用 `chrome.tabs.onUpdated` 的 `changeInfo.status === 'loading'` 触发 | `webNavigation` 是独立权限，`tabs.onUpdated` 事件本身无需权限即可监听（只是 `url` 字段会缺省，而 B1 已不依赖它） |
-| B3 | §8.2 Panel 用 Tailwind | Panel 用普通 CSS | 单人一周周期下，多一套构建配置与 Shadow Root 样式注入方案不划算；样式量级（一个侧边栏 + 一条工具条）不需要原子化 CSS |
+> 三处偏差已于提交 `docs: 回写设计文档契约与阶段状态` 一并写入 `Wisp_设计文档.md`，设计文档现已与实现一致，不再是"偏差"。本表保留备查。
+
+| # | 设计文档原文 | 本计划做法 | 理由 | 回写状态 |
+|---|---|---|---|---|
+| B1 | §2.1 `BackgroundToPanel.ACTIVE_TAB` 带 `url` | `ACTIVE_TAB` 只带 `{tabId, epoch}`，`url` 由 Content Script 在 `EXTRACTED`/`SELECTION` 中回传 | 读取 `tab.url` 需要 `tabs` 权限或 host 权限，与 §8.1「v0.1 不申请 `<all_urls>`」冲突。URL 由已注入页面的 CS 用 `location.href` 提供，权限更小且更准确 | ✅ 已回写 §2.1 |
+| B2 | §3.1 用 `webNavigation.onCommitted` 触发 `epoch++` | 用 `chrome.tabs.onUpdated` 的 `changeInfo.status === 'loading'` 触发 | `webNavigation` 是独立权限，`tabs.onUpdated` 事件本身无需权限即可监听（只是 `url` 字段会缺省，而 B1 已不依赖它） | ✅ 已回写 §2.1（并补上 CS 上报 `PAGE_NAVIGATED` 这条 SPA 通道） |
+| B3 | §8.2 Panel 用 Tailwind | Panel 用普通 CSS | 单人一周周期下，多一套构建配置与 Shadow Root 样式注入方案不划算；样式量级（一个侧边栏 + 一条工具条）不需要原子化 CSS | ✅ 已回写 §8.2 |
 
 ## 3. 文件结构（先锁定分解边界）
 
@@ -3039,11 +3043,11 @@ git commit -m "feat: 错误矩阵文案收口与可访问性走查"
 
 同时记录失败样例与已知限制（哪些站点提取失败、原因）。
 
-- [ ] **Step 6：回填设计文档**
+- [ ] **Step 6：回填设计文档**（已大幅减负——契约回写已提前完成，此处只剩实测数据与校对）
 
   - §6 表格「阶段一 Spike 实测值」列右侧补「v0.1 实测值」，填入划词工具条、主线程响应等本阶段才有数据的行。
-  - §10 勾选：`sidePanel.open()` 手势（记录实测结论）、`@mozilla/readability` 提取成功率（填实测比例）。
-  - §2.1 / §3.1 / §8.2 各加一行注记，指向本计划 §2.1 的三处偏差（B1/B2/B3）及理由。
+  - §10 勾选：`sidePanel.open()` 手势（记录实测结论）、`@mozilla/readability` 提取成功率（填实测比例）。这两项连同工具条 150ms，正是设计文档当前仅存的三处 🔬。
+  - ~~§2.1 / §3.1 / §8.2 各加一行注记，指向本计划 §2.1 的三处偏差（B1/B2/B3）及理由~~ —— **已完成**，B1/B2/B3 已直接回写进设计文档正文（见本文 §2.1）；消息契约、推理契约、面板状态三块也已同步，本步只需校对。
 
 - [ ] **Step 7：按 §7 判定阶段门并写入 README 与本文 §0**
 
