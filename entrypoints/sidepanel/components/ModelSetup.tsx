@@ -19,7 +19,13 @@ import type { LoadProgress } from '../../../core/inference/contract';
 export const MODEL_ID = 'onnx-community/Qwen3-0.6B-ONNX';
 export const REVISION = 'da1453100cf3ff33ef56d17983fc7a8648706db6';
 export const QUANT = { webgpu: 'q4f16' as const, wasm: 'q8' as const };
-const MODEL_SIZE_MB = 390;
+/**
+ * 权重体积，用于下载前告知用户与显示进度。
+ * 取 HuggingFace 上的实际字节数：q4f16 = 569,789,750 B ≈ 570 MB（WebGPU 默认路径）；
+ * WASM 的 q8 是 617,687,575 B ≈ 618 MB，略大。这里按默认路径显示。
+ * 原值 390 MB 少报了约 46%，而「下载前如实告知体积」是本产品的红线之一。
+ */
+const MODEL_SIZE_MB = 570;
 
 function formatAvailableBytes(bytes: number | null): string {
   if (bytes === null) return '浏览器未提供';
