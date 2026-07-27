@@ -1,5 +1,15 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  test: { globals: true, environment: 'node', include: ['core/**/*.test.ts', 'entrypoints/**/*.test.ts', 'entrypoints/**/*.test.tsx'] },
+  test: {
+    globals: true,
+    environment: 'node',
+    include: [
+      'core/**/*.test.ts',
+      'entrypoints/**/*.test.ts',
+      'entrypoints/**/*.test.tsx',
+      // 评测类：语料未安装时整组跳过，不拖慢日常 npm test
+      'core/**/*.bench.ts',
+    ],
+  },
 });

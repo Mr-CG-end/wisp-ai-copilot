@@ -8,6 +8,7 @@
     "build:dev": "wxt build --mode development",
     "build": "wxt build",
     "test": "vitest run",
+    "bench:extraction": "vitest run core/bench/extractionCorpus.bench.ts",
     "postinstall": "wxt prepare"
   },
   "dependencies": {
