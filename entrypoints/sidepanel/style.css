@@ -3,7 +3,8 @@
   --wisp-surface: #fbfaf6;
   --wisp-surface-muted: #e9ece5;
   --wisp-text: #20241f;
-  --wisp-text-muted: #697168;
+  /* 原 #697168 对 --wisp-bg 只有 4.39:1，未过 WCAG AA；加深到 #5f675e 后达标 */
+  --wisp-text-muted: #5f675e;
   --wisp-border: #d7d6ce;
   --wisp-accent: #476c5a;
   --wisp-accent-hover: #395b4a;
@@ -131,7 +132,7 @@ button {
   margin-bottom: 28px;
   padding-left: 4px;
   color: var(--wisp-accent);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
@@ -162,7 +163,7 @@ button {
 .wisp-setup-heading {
   margin: 0;
   color: var(--wisp-text);
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 650;
   line-height: 1.25;
   letter-spacing: -0.035em;
@@ -216,7 +217,7 @@ button {
 }
 
 .wisp-model-heading strong {
-  font-size: 18px;
+  font-size: 15px;
   line-height: 24px;
   letter-spacing: -0.02em;
 }
@@ -238,7 +239,7 @@ button {
   justify-content: space-between;
   gap: 16px;
   border-top: 1px solid var(--wisp-border);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .wisp-meta-label {
@@ -331,7 +332,7 @@ button {
 
 .wisp-progress-info strong {
   color: var(--wisp-text);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .wisp-file-tag {
@@ -401,7 +402,7 @@ button {
   border: 1px solid transparent;
   border-radius: 7px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   line-height: 20px;
   transition:
@@ -514,7 +515,7 @@ button {
 }
 
 .wisp-status-banner strong {
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .wisp-status-banner span {
@@ -998,7 +999,7 @@ button {
   border: 1px solid var(--wisp-border);
   border-radius: 7px;
   outline: none;
-  font-size: 13px;
+  font-size: 14px;
   transition: border-color 140ms ease;
 }
 
@@ -1067,15 +1068,42 @@ button {
 }
 
 .wisp-markdown-container h1 {
-  font-size: 18px;
+  font-size: 15px;
 }
 
 .wisp-markdown-container h2 {
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .wisp-markdown-container h3 {
   font-size: 14px;
+}
+
+/* 数字在原地跳动会让正在增长的输出显得抖动 */
+.wisp-page-meta,
+.wisp-stamp-time,
+.wisp-thread-index,
+.wisp-progress-figure {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 模型输出的基线节奏：段落与标题在纸面内建立统一的垂直韵律 */
+.wisp-turn-body .wisp-markdown-container > * + * {
+  margin-top: 12px;
+}
+
+.wisp-turn-body .wisp-markdown-container h1,
+.wisp-turn-body .wisp-markdown-container h2,
+.wisp-turn-body .wisp-markdown-container h3 {
+  margin: 20px 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.wisp-turn-body .wisp-markdown-container p,
+.wisp-turn-body .wisp-markdown-container li {
+  line-height: 22px;
 }
 
 .wisp-markdown-container ul,
@@ -1155,6 +1183,22 @@ button {
     padding-inline: 14px;
   }
 
+  .wisp-snapshot-header,
+  .wisp-page-detail,
+  .wisp-turn {
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 0 8px;
+  }
+
+  /* 320px 下轨道只留编号，任务标签移交纸面工具行 */
+  .wisp-thread-type {
+    display: none;
+  }
+
+  .wisp-turn-paper {
+    margin-left: 8px;
+  }
+
   .wisp-cross-tab-banner {
     grid-template-columns: 1fr;
   }
@@ -1177,6 +1221,9 @@ button {
     width: 100%;
   }
 }
+
+/* ≥420px 轨道不增宽，多出的宽度全部给内容 —— 轨道已占 44px，
+   正文行宽是本设计的稀缺资源。 */
 
 @media (prefers-reduced-motion: reduce) {
   *,
