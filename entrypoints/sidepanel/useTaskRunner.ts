@@ -178,6 +178,15 @@ export function useTaskRunner() {
         },
       };
 
+      // 开发构建下打印真正送进模型的材料。摘要跑偏时，这是区分
+      // 「上下文没选对」与「模型没能力」的唯一直接证据——两者的修法完全不同。
+      if (import.meta.env.DEV) {
+        console.debug(
+          `[wisp] ${options.taskType} material（${options.untrustedData.length} 字）:\n`
+          + options.untrustedData,
+        );
+      }
+
       const frameLagMonitor = startFrameLagMonitor();
       try {
         const api = getApi();
