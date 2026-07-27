@@ -92,7 +92,7 @@
 
 **全局约束（每个任务隐式包含；数值/命名照抄不改写）**：
 
-- **权限红线**：`permissions` 仅 `['sidePanel', 'storage', 'activeTab', 'scripting']`；**不申请 `tabs`、不申请 `<all_urls>`、不申请 `webNavigation`**。Content Script 保持 `registration: 'runtime'` + `matches: []`，不生成静态全站注册。
+- **权限范围（v0.1 已变更）**：`permissions` 为 `['sidePanel', 'storage', 'activeTab', 'scripting']`，**外加 `host_permissions: ['http://*/*', 'https://*/*']`**。原红线「不申请全站访问」因体验代价过高被放弃，决策记录见 PRD §8.1；仍**不申请 `tabs`、不申请 `webNavigation`、不用 `<all_urls>`**。Content Script 保持 `registration: 'runtime'` + `matches: []`，不生成静态全站注册——有权限不等于自动注入。
 - **信任边界**：网页正文、选区一律为不可信数据，只经 `buildUserContent()` 的 `<material>` 围栏 + `sanitizeUntrusted()` 转义进入 user 消息，**永不拼进 system 消息**。页面里的任何文字不得触发点击、填表、下载、权限申请。
 - **安全渲染**：模型输出只经 `react-markdown` + `rehype-sanitize` 渲染，禁用原始 HTML；链接经 `safeUrl()` 过滤（仅 `http:`/`https:`/`mailto:`），外链一律 `rel="noopener noreferrer nofollow" target="_blank"`。任何位置不得使用 `dangerouslySetInnerHTML`。
 - **防串页闭环（四道，缺一不可）**：① SW 是 `epoch` 唯一权威且跨 SW 重启持久化；② Port 断连与 `PAGE_UNLOADING` 覆盖整页导航与标签关闭；③ CS 的 `PAGE_NAVIGATED` 覆盖 SPA 的 History 导航；④ Panel 应用任何 `onToken`/提取结果前必须过 `isCtxCurrent(ctx, boundCtx)`，不符即丢弃并 `cancel()`。
@@ -114,7 +114,7 @@
 
 | # | 设计文档原文 | 本计划做法 | 理由 | 回写状态 |
 |---|---|---|---|---|
-| B1 | §2.1 `BackgroundToPanel.ACTIVE_TAB` 带 `url` | `ACTIVE_TAB` 只带 `{tabId, epoch}`，`url` 由 Content Script 在 `EXTRACTED`/`SELECTION` 中回传 | 读取 `tab.url` 需要 `tabs` 权限或 host 权限，与 §8.1「v0.1 不申请 `<all_urls>`」冲突。URL 由已注入页面的 CS 用 `location.href` 提供，权限更小且更准确 | ✅ 已回写 §2.1 |
+| B1 | §2.1 `BackgroundToPanel.ACTIVE_TAB` 带 `url` | `ACTIVE_TAB` 只带 `{tabId, epoch}`，`url` 由 Content Script 在 `EXTRACTED`/`SELECTION` 中回传 | ~~读取 `tab.url` 需要 `tabs` 或 host 权限，与「不申请 `<all_urls>`」冲突~~ **原权限理由已随 v0.1 申请常驻主机权限而失效**；实现保留不变，改以「CS 的 `location.href` 更准确（SPA 导航后 `tab.url` 可能滞后）、真源唯一」为理由 | ✅ 已回写 §2.1 |
 | B2 | §3.1 用 `webNavigation.onCommitted` 触发 `epoch++` | 用 `chrome.tabs.onUpdated` 的 `changeInfo.status === 'loading'` 触发 | `webNavigation` 是独立权限，`tabs.onUpdated` 事件本身无需权限即可监听（只是 `url` 字段会缺省，而 B1 已不依赖它） | ✅ 已回写 §2.1（并补上 CS 上报 `PAGE_NAVIGATED` 这条 SPA 通道） |
 | B3 | §8.2 Panel 用 Tailwind | Panel 用普通 CSS | 单人一周周期下，多一套构建配置与 Shadow Root 样式注入方案不划算；样式量级（一个侧边栏 + 一条工具条）不需要原子化 CSS | ✅ 已回写 §8.2 |
 
@@ -653,7 +653,7 @@ Expected: 两条命令均退出码 0
 
   - 点击工具栏 Wisp 图标 → 侧边栏打开，SW 控制台无报错。
   - 打开 SW 的 DevTools，在当前标签页导航一次 → 控制台可见 `EPOCH_INVALIDATED` 广播失败被静默（面板未监听时无红色未捕获错误）。
-  - `chrome://extensions` 上查看 manifest：`permissions` 恰为 `sidePanel/storage/activeTab/scripting` 四项，无 `tabs`、无 `<all_urls>`。
+  - `chrome://extensions` 上查看 manifest：`permissions` 恰为 `sidePanel/storage/activeTab/scripting` 四项；`host_permissions` 恰为 `http://*/*` 与 `https://*/*` 两项（v0.1 变更，见 §2）；无 `tabs`、无 `webNavigation`、无 `<all_urls>`。
 
 - [ ] **Step 5：提交**
 
@@ -2421,7 +2421,8 @@ const PRIVACY_NOTICE = [
   '无账户、无遥测、无广告 SDK、无远程错误日志。',
   '本地保存的内容：会话与消息存在浏览器 IndexedDB（默认 7 天，可改为「关闭标签页即删除」）；模型权重存在 Cache API；设置存在扩展存储。三者都可在上方一键清除。',
   '本地数据不做应用层加密，无法防止使用同一操作系统账户的其他人读取。',
-  '权限用途：sidePanel 显示界面 · activeTab + scripting 仅在你主动启用某个页面时读取该页 · storage 保存设置。未申请全站访问权限。',
+  '权限用途：sidePanel 显示界面 · scripting 注入读取脚本 · storage 保存设置 · 网站访问权限用于读取你正在看的网页正文。',
+  '虽然拥有网站访问权限，但正文只在你点击「读取当前页」或使用划词时读取一次，之后使用内存快照，不会持续监视网页。',
   '不读取也不写入密码、验证码、支付与身份认证字段；不会自动点击页面上的任何按钮。',
 ];
 ```
@@ -3070,7 +3071,7 @@ git commit -m "docs: 阶段二 v0.1 实测数据与阶段门结论"
 | 网页正文提取、摘要、问答、流式、取消 | Task 3、4、8 |
 | 划词工具条：解释/总结/改写/翻译 | Task 11、12 |
 | 加载/空/错误/离线/不支持页面提示（六态） | Task 5、13 |
-| 最小权限 | Task 2（`permissions` 四项，无 `<all_urls>`） |
+| 权限范围与说明 | Task 2（四项 `permissions` + 常驻 `http(s)://*/*` 主机权限；无 `tabs`／`webNavigation`／`<all_urls>`。原「最小权限」口径已按 PRD §8.1 决策记录调整） |
 | 基础隐私说明 | Task 10 Step 7 第 5 组（`PRIVACY_NOTICE` 七条，含出网行为与本地保留披露） |
 | 清除本地数据入口 | Task 10 Step 7 第 4 组（三个独立按钮 + 清理后复测实际结果） |
 | F-02 提取成功率 ≥ 80%（10 文章页 + 5 SPA） | Task 14 |
@@ -3091,7 +3092,7 @@ git commit -m "docs: 阶段二 v0.1 实测数据与阶段门结论"
 
 1. `npm test` → 纯逻辑模块全绿：阶段一既有 7 个测试文件（其中 `cacheSelection.test.ts` 由 Task 6 扩充）+ 本阶段新增 `epoch / pending / truncate / article / taskGuard / urlSafety / cleanup / settings / outputLength / selection / sensitive` 共 11 个测试文件。
 2. `npx tsc --noEmit` → 无类型错误。
-3. `npm run build` → `.output/chrome-mv3/` 生成；核对 `assets/` 内含本地 ORT `.mjs/.wasm`；核对 `manifest.json` 权限恰为四项且无 `<all_urls>`。
+3. `npm run build` → `.output/chrome-mv3/` 生成；核对 `assets/` 内含本地 ORT `.mjs/.wasm`；核对 `manifest.json`：`permissions` 恰为四项，`host_permissions` 恰为 `http://*/*` 与 `https://*/*`，无 `tabs`／`webNavigation`／`<all_urls>`。
 4. `npm run build:dev` 后加载扩展，按 PRD §14.1 六步 Demo 连续走一遍：离线展示后端 → 长网页流式摘要并中途停止 → 重新生成并追问 + 超长提示 → 划词解释（样式隔离）→ 受限页面错误态 → Network 面板确认零业务请求。
 5. 回归集 15 页提取成功率 ≥ 80%；六步 Demo 连跑 10 轮 0 崩溃 0 串页。
 6. 实测数据回填 README 与设计文档，按 §7 给出阶段门判定。

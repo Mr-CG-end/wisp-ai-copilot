@@ -137,7 +137,7 @@ Wisp 有**三条通道**，机制与职责不同，切勿混用：
 
 **权威归属**：`epoch` 由 **Service Worker** 持有（`Map<tabId, epoch>`）。
 
-**触发源是双通道，不是 `webNavigation`**（实现校正）：`webNavigation` 是独立权限，与「最小权限、不申请 `<all_urls>`」冲突，**本项目未申请**。实际递增 epoch 的两条通道是：
+**触发源是双通道，不是 `webNavigation`**（实现校正）：`webNavigation` 是一项独立权限，本项目未申请（v0.1 虽已改用常驻主机权限，但仍不申请 `webNavigation` 与 `tabs`，见 §9）。实际递增 epoch 的两条通道是：
 
 1. `tabs.onUpdated(status: 'loading')` —— 覆盖整页导航与刷新；
 2. Content Script 上报 `PAGE_NAVIGATED` —— 覆盖 SPA 的 History 导航（不销毁 CS，也不一定触发 `tabs.onUpdated`）。
@@ -199,8 +199,10 @@ type PanelToBackground =
 // —— runtime：Service Worker → Side Panel（广播）—— //
 type BackgroundToPanel =
   | { type: 'ACTIVE_TAB'; tabId: number; epoch: number }
-  //  去掉 url：读取标签 url 需要 tabs 或宿主权限，与最小权限冲突；
-  //  url 由 Content Script 用 location.href 填进 TaskContext，不从 SW 侧取。
+  //  去掉 url：当初的理由是「读 tab.url 需要 tabs 或宿主权限」。v0.1 改用常驻主机
+  //  权限后该约束已不存在，但**实现保持不变**——url 由 Content Script 用 location.href
+  //  填进 TaskContext 更准确（SPA 同文档导航后 tab.url 可能滞后），且真源唯一。
+  //  若后续要让面板在 CS 注入前就知道当前页地址，可再评估把 url 加回本消息。
   | { type: 'PENDING_ACTION'; id: Uuid; action: SelectionAction; text: string; ctx: TaskContext }
   //  加 id：广播与 PANEL_READY 拉取两条路径可能都送达，Panel 按 id 去重。
   | { type: 'EPOCH_INVALIDATED'; tabId: number; epoch: number };
@@ -475,7 +477,7 @@ init → 试 WebGPU(q4f16) ──成功──▶ 自检推理 ──通过──
 
 ### 3.2 Content Script（`entrypoints/content.ts`）
 
-**按需注入（回应评审 #12）**：WXT 里声明 `registration:'runtime'`、`matches:[]`，**不写入 manifest 静态 matches**，避免变相全站权限、与"不申请 `<all_urls>`"冲突：
+**按需注入（回应评审 #12）**：WXT 里声明 `registration:'runtime'`、`matches:[]`，**不写入 manifest 静态 matches**。v0.1 虽已申请常驻主机权限，这条依然保留且理由更新为：**有权限不等于该自动注入**——静态 matches 会让脚本进入用户访问的每一个页面，而 Wisp 只需在用户启用某页时注入一次。按需注入把「能读」与「实际读」分开：
 
 ```ts
 export default defineContentScript({
@@ -706,7 +708,7 @@ type ErrorCode =
 
 | 场景 | 触发点 | 错误码 | 产品行为 |
 |---|---|---|---|
-| 缺少页面授权 | `ENSURE_CONTENT_SCRIPT` 注入被拒，且判定为缺 `activeTab` 授权 | `PAGE_PERMISSION_REQUIRED` | 引导用户点击工具栏图标授权当前页。**与下一行区分**：这条是用户一次点击就能解决的，下一行是浏览器硬限制、点了也没用 |
+| 缺少页面授权 | `ENSURE_CONTENT_SCRIPT` 注入被拒，且判定为缺授权 | `PAGE_PERMISSION_REQUIRED` | 引导用户点击工具栏图标授权当前页。**v0.1 改用常驻主机权限后此码位大幅退居次要**——正常情况下不再触发，只在用户于 `chrome://extensions` 把站点访问手动收窄为「点击时」后才会出现。**与下一行区分**：这条一次点击就能解决，下一行是浏览器硬限制、点了也没用 |
 | 页面禁止注入 | 注入失败（`chrome://`、Web Store 等浏览器硬限制） | `PAGE_INJECTION_BLOCKED` | 说明浏览器限制，禁用页面相关操作 |
 | 页面无正文 | readability 空结果 | `PAGE_NO_CONTENT` | 建议划词或换页面 |
 | 页面过长 | 超上下文 | `PAGE_TOO_LONG` | 提示仅分析部分，显示处理范围 |
@@ -806,7 +808,10 @@ type ErrorCode =
 - **不展示思维链**：`enable_thinking:false` + 输出兜底过滤 `<think>`。
 - **敏感字段黑名单**：不读/不写密码、验证码、支付、银行卡、隐藏认证字段、Cookie。
 - **填入安全（v0.2）**：写入绑定用户当前明确选中的目标；导航或目标失效要求重新确认；未确认不改动输入框；永不自动点发送/提交/发布/购买。
-- **最小权限**：`sidePanel` / `activeTab` / `scripting` / `storage` + 仅 OCR 时截图能力；v0.1 不申请 `<all_urls>`；Content Script `registration:'runtime'` 不生成静态全站注册。
+- **权限范围（v0.1 变更，见 PRD §8.1 决策记录）**：`sidePanel` / `activeTab` / `scripting` / `storage`，**外加常驻主机权限 `http://*/*` 与 `https://*/*`**。原「只用 `activeTab`、不申请全站」的策略因体验代价过高被放弃——`activeTab` 按标签页发放且随手势失效，用户每切一个标签页都要重新点扩展图标。
+  - 仍不申请 `tabs`、`webNavigation`、`<all_urls>`（后者含 `file://` 等用不到的协议）。
+  - Content Script 仍是 `registration:'runtime'` + `matches: []`，**按需注入不变**：有权限不等于自动注入，仍只在用户启用某页时才注入脚本。
+  - **「数据不出网」不依赖主机权限**：它由 CSP `connect-src` 白名单在网络层强制。扩展现在能读页面，但除模型下载来源外无处可发——这条防线未被本次变更削弱。
 - **CSP 与网络白名单（回应评审 #M5）**：`extension_pages` CSP 仅 `'wasm-unsafe-eval'`（不放开 `'unsafe-eval'`）；**`connect-src` 仅放行模型下载来源**（**已核定**：`https://huggingface.co`、`https://cdn-lfs.huggingface.co`、`https://cdn-lfs-us-1.huggingface.co`、`https://us.aws.cdn.hf.co`、`https://cas-bridge.xethub.hf.co`），其余出网默认拒绝，从策略上兜住"数据不出网"。
 - **无远程代码**：所有 JS/WASM 本地打包；仅模型权重/tokenizer/config 作数据远程下载并固定来源与 revision。
 - **隐私承诺**：除用户主动触发的模型下载外，网页内容/URL/文档/图片/表单/提示词/回答/使用数据均不出网；无账户、无遥测、无广告 SDK、无远程错误日志。本地数据不默认加密，隐私说明如实披露（含隐身模式处理，§2.2）。
