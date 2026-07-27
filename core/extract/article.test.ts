@@ -26,6 +26,30 @@ describe('extractArticle', () => {
     expect(r!.charCount).toBe(r!.text.length);
   });
 
+  it('块级元素之间产生换行，即使 DOM 里没有元素间空白', () => {
+    // JS 渲染出的 DOM（docsify / React 等）标签之间没有空白文本节点，
+    // textContent 与首尾相接的 join('') 都会把标题和正文粘成一句，
+    // 下游按段落切分的选段逻辑随之全部失效，只能退化成「砍前 N 字」。
+    const doc = docFrom(
+      `<html><body><article><h2>基础理论与模型部署</h2><p>${BODY_TEXT}</p>`
+      + `<ul><li>要点甲：${BODY_TEXT}</li><li>要点乙：${BODY_TEXT}</li></ul></article></body></html>`,
+    );
+    const r = extractArticle(doc);
+    expect(r).not.toBeNull();
+    expect(r!.text).not.toContain('基础理论与模型部署这是一篇');
+    expect(r!.text.split('\n').length).toBeGreaterThan(3);
+  });
+
+  it('降级路径同样保留块边界', () => {
+    const doc = docFrom(
+      `<html><body><main><h2>小节标题</h2><p>${BODY_TEXT}</p><p>${BODY_TEXT}</p></main>${OVERSIZE_FILLER}</body></html>`,
+    );
+    const r = extractArticle(doc);
+    expect(r!.method).toBe('heuristic');
+    expect(r!.text).not.toContain('小节标题这是一篇');
+    expect(r!.text.split('\n').length).toBeGreaterThan(2);
+  });
+
   it('正文过短返回 null（对应 PAGE_NO_CONTENT）', () => {
     expect(extractArticle(docFrom('<html><body><p>太短</p></body></html>'))).toBeNull();
   });
@@ -78,7 +102,10 @@ describe('extractArticle', () => {
     );
     const r = extractArticle(doc);
     expect(r!.method).toBe('heuristic');
-    expect(r!.text.length).toBe(MAX_HEURISTIC_CHARS);
+    // 不断言恰好等于上限：块边界补进去的换行会被 normalizeText 收尾 trim 掉，
+    // 长度可能差几个字符。真正要守的是「不超过上限、且确实截断到上限附近」。
+    expect(r!.text.length).toBeLessThanOrEqual(MAX_HEURISTIC_CHARS);
+    expect(r!.text.length).toBeGreaterThan(MAX_HEURISTIC_CHARS - 10);
   });
 
   it('降级路径的根节点定位保持 main → article → body 顺序', () => {

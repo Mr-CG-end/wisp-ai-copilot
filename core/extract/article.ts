@@ -13,6 +13,18 @@ export const MAX_HEURISTIC_CHARS = 50_000;
 
 const STRIP_SELECTOR = 'script,style,noscript,template,nav,header,footer,aside,form,iframe';
 
+/**
+ * 进入这些元素时插入换行，把块边界写进纯文本。
+ *
+ * 必须显式插入：`textContent` 与文本节点首尾相接都**不会**产生换行，静态站点
+ * 只是碰巧在标签之间有空白文本节点才看起来正常；JS 渲染出的 DOM（docsify、
+ * React 等）没有那些空白，整页会粘成一个巨块，下游按段落切分的选段逻辑随之
+ * 全部失效，只能退化成「砍前 N 字」。
+ */
+const BLOCK_SELECTOR = 'address,article,aside,blockquote,br,dd,div,dl,dt,figcaption,figure,'
+  + 'footer,form,h1,h2,h3,h4,h5,h6,header,hr,li,main,nav,ol,p,pre,section,table,tbody,td,'
+  + 'tfoot,th,thead,tr,ul';
+
 export interface ExtractResult {
   title: string;
   text: string;
@@ -30,31 +42,42 @@ function normalizeText(raw: string): string {
 }
 
 /**
- * 降级提取。不克隆 DOM —— 本函数在宿主页面主线程同步执行，而降级路径恰恰是
- * 被巨型页面触发的，`cloneNode(true)` 会为几万节点再分配一份平行 DOM 造成可感知冻结。
- * TreeWalker 天然只读，比「在 clone 上删节点」更强地保证不污染页面。
+ * 块级感知的纯文本序列化，两条抽取路径共用。
+ *
+ * 不克隆 DOM —— 降级路径恰恰是被巨型页面触发的，`cloneNode(true)` 会为几万节点
+ * 再分配一份平行 DOM，而本函数在宿主页面主线程同步执行。TreeWalker 天然只读，
+ * 比「在 clone 上删节点」更强地保证不污染页面。
  */
-function heuristicText(doc: Document): string {
-  const root = doc.querySelector('main') ?? doc.querySelector('article') ?? doc.body;
-  if (!root) return '';
-
+function blockAwareText(root: Element, limit: number): string {
+  const doc = root.ownerDocument;
   const walker = doc.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       if (node.nodeType === Node.TEXT_NODE) return NodeFilter.FILTER_ACCEPT;
-      return (node as Element).matches(STRIP_SELECTOR)
-        ? NodeFilter.FILTER_REJECT
-        : NodeFilter.FILTER_SKIP;
+      const element = node as Element;
+      if (element.matches(STRIP_SELECTOR)) return NodeFilter.FILTER_REJECT;
+      // 块级元素本身也接受，只为在进入时补一个换行；其余元素继续下钻
+      return element.matches(BLOCK_SELECTOR) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
     },
   });
 
   const chunks: string[] = [];
   let total = 0;
-  for (let node = walker.nextNode(); node && total < MAX_HEURISTIC_CHARS; node = walker.nextNode()) {
-    const text = node.nodeValue ?? '';
-    chunks.push(text);
-    total += text.length;
+  for (let node = walker.nextNode(); node && total < limit; node = walker.nextNode()) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.nodeValue ?? '';
+      chunks.push(text);
+      total += text.length;
+    } else {
+      chunks.push('\n');
+    }
   }
-  return normalizeText(chunks.join('').slice(0, MAX_HEURISTIC_CHARS));
+  return normalizeText(chunks.join('').slice(0, limit));
+}
+
+function heuristicText(doc: Document): string {
+  const root = doc.querySelector('main') ?? doc.querySelector('article') ?? doc.body;
+  if (!root) return '';
+  return blockAwareText(root, MAX_HEURISTIC_CHARS);
 }
 
 /**
@@ -71,7 +94,14 @@ export function extractArticle(doc: Document): ExtractResult | null {
     } catch {
       parsed = null;
     }
-    const text = normalizeText(parsed?.textContent ?? '');
+    // 走 parsed.content（清洗后的 HTML）而非 parsed.textContent：后者同样不产生
+    // 块边界，在 JS 渲染的页面上会把整篇粘成一块。此处不设字符上限，保持原行为。
+    const text = parsed?.content
+      ? blockAwareText(
+          new DOMParser().parseFromString(parsed.content, 'text/html').body,
+          Number.POSITIVE_INFINITY,
+        )
+      : normalizeText(parsed?.textContent ?? '');
     if (text.length >= MIN_ARTICLE_CHARS) {
       return {
         title: parsed?.title || doc.title || '',
