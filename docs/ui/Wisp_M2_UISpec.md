@@ -142,7 +142,7 @@ font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Microsoft YaH
 - 高度 8px，轨道为 `--wisp-surface-muted`，进度为 `--wisp-accent`。
 - 不使用循环动画；真实进度单调增长。
 - 上方显示阶段标题，下方显示百分比和体积。
-- 示例：`38% · 约 148 MB / 390 MB`。
+- 示例：`38% · 约 217 MB / 570 MB`。体积以 `ModelSetup.tsx` 的 `MODEL_SIZE_MB` 为准（v0.1 由 390 更正为 570，原值少报约 46%，而「下载前如实告知体积」是产品红线之一）。
 
 ### 5.5 浏览器上下文栏（v3：快照凭证 + 详情行）
 

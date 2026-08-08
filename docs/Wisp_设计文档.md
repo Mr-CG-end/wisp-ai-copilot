@@ -99,7 +99,7 @@ wisp/
 │     ├─ usePageChannel.ts      # Port 页面通道与标签绑定
 │     ├─ useTaskRunner.ts       # 生成任务与流式节流
 │     ├─ style.css              # Panel 样式（普通 CSS）
-│     ├─ components/            # ModelSetup / TaskPanel / StreamMarkdown
+│     ├─ components/            # ModelSetup / TaskPanel / StreamMarkdown / Thread / Turn / SnapshotStamp
 │     └─ inference.worker.ts    # Dedicated Worker（Comlink.expose）
 └─ core/                         # 与 UI 无关的可独立测试逻辑
    ├─ messaging/                # 消息信封类型、Port 封装、epoch 与待投递缓存

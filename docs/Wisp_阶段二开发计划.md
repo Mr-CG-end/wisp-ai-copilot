@@ -29,13 +29,30 @@
 
 ### 0.1 当前进度
 
+| 阶段 | 状态 | 证据 |
+|---|---|---|
 | Task 1～4 (M1) | 已完成 | 单测 11/11 覆盖，Types/SW/Extract/Port 页面读取链路打通且 WXT 打包无错 |
 | Task 5～8 (M2) | 已完成 | 状态容器 (ce1f5f3) + 缓存恢复 (d1e6d52) + 安全渲染 (91f60c6) + 摘要追问 (871e69d)，单测 18/18 (91 项) 全绿，WXT 生产/开发构建均打通 |
 | Task 9 | 已完成 | 会话存储与级联清理 (67387ea)：Dexie `sessions`/`messages` + `appendMessage` 同事务维护 `updatedAt`，隐身上下文完全跳过持久化 |
-| M2 收口 | 已完成 | 生成期渲染负载收敛与档位统一 (d9cb8f0) + 正文提取降级路径不再克隆 DOM (4c46fa4) + 设计文档契约回写；单测 24 文件 119 项全绿，`tsc --noEmit` 与 `build:dev` 均通过。详见 `Wisp_M2收口与设计文档回写计划.md` |
-| Task 10～14 | 待执行 | 推进 M3 划词与数据管理 |
+| M2 收口 | 已完成 | 生成期渲染负载收敛与档位统一 (d9cb8f0) + 正文提取降级路径不再克隆 DOM (4c46fa4) + 设计文档契约回写 (f5b64b4)。详见 `Wisp_M2收口与设计文档回写计划.md`；其中 Task B（来源标识常驻）已取消，由轨迹 UI 的「只 sticky 快照凭证」取代 |
+| 轨迹 UI 重构 | 已完成 | 计划外插入的一轮 UI 升级，11 个提交 (2253101～e427c7a)：新增纯函数投影层 `core/panel/thread.ts` 把 store 三字段合成轮次数组，渲染层拆出 `Thread`/`Turn`/`SnapshotStamp`，`PageInfo` 增 `readAt`，UISpec 升 v3。依据 `docs/superpowers/specs/2026-07-27-wisp-thread-ui-design.md`，实施脚本见 `docs/superpowers/plans/2026-07-27-wisp-thread-ui.md` |
+| 审查报告后续修复 | 已完成 | 8 个提交 (25d8fb8～aa82727)：摘要选段排除无语义短行与预留开头预算、摘要提示词先给主旨句并匹配正文语言、正文抽取保留块级边界、接入正文抽取质量评测（需外部语料，未安装时整组跳过）、申请常驻主机权限并修正模型体积显示 |
+| 测试基线 | — | 31 文件 176 项通过 1 项跳过（跳过的是需外部 clone 语料的抽取评测 bench），`tsc --noEmit` 与 `build:dev` 均通过 |
+| Task 10～14 | 待执行 | 已按 M3/M4 方案重划分为 9 个工作包，并修正本文三处失效内容，见下方 §0.1.1 |
 
 > 执行时每完成一个任务，在此表补一行状态与证据（沿用阶段一文档的进度同步方式）；Task 14 完成后在本节写入阶段门结论。
+
+### 0.1.1 Task 10～14 的三处失效内容（执行前必读）
+
+本文定稿于 2026-07-25，此后设计文档回写与外部审查推翻了其中三处。**§4 的 Task 10～14 与下表冲突时，以下表为准。**
+
+| # | 本文原文 | 现行做法 | 依据 |
+|---|---|---|---|
+| R1 | Task 10 Step 2/5/8 创建 `core/panel/outputLength.ts` 与 `maxNewTokensFor()`，`Settings` 含 `outputLength` 字段，并改 `TaskPanel.tsx` 接入 | **整体裁撤**。该模块不建，`Settings` 只保留 `backend` / `retentionDays` / `modelId`，Task 10 完全不改 `TaskPanel.tsx` | `Wisp_设计文档.md` §2.2「`outputLength` 已删除，由性能档位机制取代……保留两套并存只会产生『用户选了 long 但档位把它压回 256』这类无法解释的行为」 |
+| R2 | §0.3 把 Task 10 的「后端切换」下拉列为**可裁剪 1** | **不可裁剪**。且 WASM 选项下必须补两句说明：不占显卡因而网页更流畅；与 WebGPU 用不同量化文件，切换需另外下载约 618 MB | 审查报告 §1.4-D 把 WASM 从「故障兜底」升格为集显用户的正当选择；第二句是防止一次点击触发巨型下载 |
+| R3 | Task 10 Step 7 调用 `selectModelCacheUrls` 统计缓存条目数 | 该函数**不存在**（实际导出是语义不同的 `snapshotModelCacheUrls`）。需在 `core/inference/modelCache.ts` 新增 `countModelCacheEntries` | 代码核实 |
+
+> 另有两条待复现的疑似缺陷，进入 M3 施工前先按「先复现再定根因」处理，不基于假设改代码：① `ModelSetup.tsx` 的 cacheOnly 失败路径在 `manifest.backend === 'wasm'` 时会走到 `purgeModelCacheEntries`，可能删掉已下好的权重；② `background.ts` 的 `TOOLBAR_ACTION` 把 `sidePanel.open()` 包在 `void hydrated.then()` 里，这个 await 可能就是手势丢失的元凶——必须先改成同步调用再验证「手势能否跨 CS→SW」，否则测出的是自己造成的假结论。
 
 ### 0.2 里程碑分组与每组阶段门
 
@@ -2253,6 +2270,8 @@ git commit -m "feat: 会话存储、级联清理与隐身模式不落盘（单�
 ---
 
 ### Task 10: 设置、存储用量与清除数据
+
+> ⚠️ **本任务的 Step 2 / 5 / 8 已失效**：`outputLength` 模块整体裁撤，`Settings` 不含该字段，本任务不改 `TaskPanel.tsx`；「后端切换」不再是可裁剪项；`selectModelCacheUrls` 不存在。三条修正见 §0.1.1（R1/R2/R3），与下文冲突时以 §0.1.1 为准。
 
 **Files**：
 - Create: `core/storage/settings.ts` / `core/storage/settings.test.ts`
