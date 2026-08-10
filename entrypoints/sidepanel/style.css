@@ -111,6 +111,38 @@ button {
   background: var(--wisp-accent);
 }
 
+.wisp-header-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 顶栏导航（设置 / 返回）：文字按钮，字号与运行状态同档，不抢品牌字标的重心。
+   负外边距把可点区域撑到 §5.2 的 32px 下限，同时让文字仍与顶栏内容对齐。 */
+.wisp-btn-nav {
+  min-height: 32px;
+  margin-inline: -8px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: var(--wisp-text-muted);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.wisp-btn-nav:hover:not(:disabled) {
+  color: var(--wisp-text);
+  background: var(--wisp-surface-muted);
+}
+
 .wisp-app-main {
   min-height: 0;
   flex: 1;
@@ -367,7 +399,8 @@ button {
 .wisp-btn,
 .wisp-btn-sm,
 .wisp-btn-send,
-.wisp-btn-link {
+.wisp-btn-link,
+.wisp-btn-nav {
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -438,6 +471,16 @@ button {
   background: var(--wisp-danger-soft);
 }
 
+/* §5.2 为「确认危险操作」预留的红色实底态：只出现在行内两步确认的第二步。 */
+.wisp-btn-danger-solid {
+  color: #fff;
+  background: var(--wisp-danger);
+}
+
+.wisp-btn-danger-solid:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wisp-danger) 86%, #000);
+}
+
 .wisp-btn-link {
   min-height: 24px;
   padding: 0;
@@ -458,14 +501,16 @@ button {
 
 .wisp-btn:active:not(:disabled),
 .wisp-btn-sm:active:not(:disabled),
-.wisp-btn-send:active:not(:disabled) {
+.wisp-btn-send:active:not(:disabled),
+.wisp-btn-nav:active:not(:disabled) {
   transform: translateY(1px);
 }
 
 .wisp-btn:disabled,
 .wisp-btn-sm:disabled,
 .wisp-btn-send:disabled,
-.wisp-btn-link:disabled {
+.wisp-btn-link:disabled,
+.wisp-btn-nav:disabled {
   cursor: not-allowed;
   opacity: 0.46;
 }
@@ -474,6 +519,8 @@ button {
 .wisp-btn-sm:focus-visible,
 .wisp-btn-send:focus-visible,
 .wisp-btn-link:focus-visible,
+.wisp-btn-nav:focus-visible,
+.wisp-select:focus-visible,
 .wisp-qa-input:focus-visible {
   outline: 2px solid var(--wisp-focus);
   outline-offset: 2px;
@@ -1213,6 +1260,113 @@ button {
   font-style: italic;
 }
 
+/* —— 设置页 —— */
+
+/* 五组内容纵向排开，不给每组套卡片：分组靠标题与既有的 .wisp-meta-list 分隔线，
+   400px 宽度下卡片堆叠只会把有效行宽再削掉两层 padding。 */
+.wisp-settings {
+  width: 100%;
+  max-width: 468px;
+  margin: 0 auto;
+  padding: 20px 16px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.wisp-settings-heading {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+  letter-spacing: -0.01em;
+}
+
+.wisp-settings-group .wisp-meta-list {
+  margin-bottom: 0;
+}
+
+.wisp-settings-note {
+  margin: 10px 0 0;
+  color: var(--wisp-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 常驻的 live region：没有结果时不能塌成 display:none，否则读屏拿不到播报点。 */
+.wisp-settings-result {
+  margin: 10px 0 0;
+  color: var(--wisp-accent);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.wisp-settings-result:empty {
+  margin: 0;
+}
+
+.wisp-settings-result.is-failed {
+  color: var(--wisp-danger);
+}
+
+.wisp-settings-banner {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.wisp-settings-banner div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wisp-settings-banner .wisp-btn {
+  width: fit-content;
+}
+
+.wisp-select {
+  max-width: 58%;
+  height: 30px;
+  padding: 0 6px;
+  color: var(--wisp-text);
+  background: var(--wisp-surface);
+  border: 1px solid var(--wisp-border);
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.wisp-select:hover {
+  border-color: color-mix(in srgb, var(--wisp-accent) 42%, var(--wisp-border));
+}
+
+.wisp-confirm-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 用量整行是这一组的全部内容，320px 下必须换行而不是省略号截断 */
+.wisp-settings-usage {
+  overflow: visible;
+  white-space: normal;
+}
+
+.wisp-privacy-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--wisp-text-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
 @media (max-width: 359px) {
   .wisp-app-header {
     padding-inline: 14px;
@@ -1226,7 +1380,8 @@ button {
     padding-left: 28px;
   }
 
-  .wisp-task-panel {
+  .wisp-task-panel,
+  .wisp-settings {
     padding-inline: 14px;
   }
 

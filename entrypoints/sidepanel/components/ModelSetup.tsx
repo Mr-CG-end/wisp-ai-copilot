@@ -13,19 +13,25 @@ import {
   writeCacheManifest,
 } from '../../../core/inference/modelCache';
 import { isCacheRestoreFailure } from '../../../core/inference/restoreFailure';
+import {
+  MODEL_ID,
+  MODEL_SIZE_MB,
+  QUANT,
+  REVISION,
+  WASM_MODEL_SIZE_MB,
+} from '../../../core/inference/modelIdentity';
 import { selectSetupSteps } from '../../../core/panel/setupSteps';
+import { loadSettings, saveSettings } from '../../../core/storage/settings';
 import type { LoadProgress } from '../../../core/inference/contract';
 
-export const MODEL_ID = 'onnx-community/Qwen3-0.6B-ONNX';
-export const REVISION = 'da1453100cf3ff33ef56d17983fc7a8648706db6';
-export const QUANT = { webgpu: 'q4f16' as const, wasm: 'q8' as const };
-/**
- * 权重体积，用于下载前告知用户与显示进度。
- * 取 HuggingFace 上的实际字节数：q4f16 = 569,789,750 B ≈ 570 MB（WebGPU 默认路径）；
- * WASM 的 q8 是 617,687,575 B ≈ 618 MB，略大。这里按默认路径显示。
- * 原值 390 MB 少报了约 46%，而「下载前如实告知体积」是本产品的红线之一。
- */
-const MODEL_SIZE_MB = 570;
+// 常量已下沉到 core/inference/modelIdentity（设置页也要读）。
+// 这里保留 re-export，既有从本组件导入这三个值的地方不必改。
+export { MODEL_ID, QUANT, REVISION };
+
+const BACKEND_LABEL: Record<'webgpu' | 'wasm', string> = {
+  webgpu: 'WebGPU',
+  wasm: '兼容模式',
+};
 
 function formatAvailableBytes(bytes: number | null): string {
   if (bytes === null) return '浏览器未提供';
@@ -68,6 +74,17 @@ export const ModelSetup: React.FC = () => {
   const [isClearingCache, setIsClearingCache] = useState(false);
   const [availableBytes, setAvailableBytes] = useState<number | null>(null);
   const [cacheNotice, setCacheNotice] = useState<string | null>(null);
+  /**
+   * 本机缓存的是 A 后端的权重，用户在设置页把首选后端改成了 B。
+   * 记下这对取值就进入「等用户选」的分支：既不自动用回 A（那样设置页的选择白做），
+   * 也不自动下 B（那是一次未经确认的巨型下载）。
+   */
+  const [backendMismatch, setBackendMismatch] = useState<{
+    cached: 'webgpu' | 'wasm';
+    preferred: 'webgpu' | 'wasm';
+  } | null>(null);
+  /** 本次下载的是哪套权重，决定进度条按 570 还是 618 MB 报数。 */
+  const [downloadingBackend, setDownloadingBackend] = useState<'webgpu' | 'wasm'>('webgpu');
   const initAttemptLock = useRef(false);
   const initAttemptRef = useRef(0);
   const initCacheBaselineRef = useRef<ReadonlySet<string> | null>(null);
@@ -78,100 +95,129 @@ export const ModelSetup: React.FC = () => {
     setCurrentFile(p.file);
   });
 
-  // 挂载时校验本地缓存
-  useEffect(() => {
-    if (initAttemptLock.current) return;
-    initAttemptLock.current = true;
+  /**
+   * 缓存校验。提到组件作用域是因为「改回已缓存后端」按钮要再跑一遍同一段逻辑 ——
+   * 写完设置后重跑本函数，后端不一致的分支自然不再命中，直接走回 cacheOnly 恢复。
+   */
+  async function checkLocalCache() {
+    const attempt = initAttemptRef.current + 1;
+    initAttemptRef.current = attempt;
+    setModelStatus('checking-cache');
+    const storageEstimate = navigator.storage?.estimate
+      ? navigator.storage.estimate().catch(() => null)
+      : Promise.resolve(null);
+    const [manifest, estimate, settings] = await Promise.all([
+      readCacheManifest(),
+      storageEstimate,
+      loadSettings(),
+    ]);
+    if (attempt !== initAttemptRef.current) return;
+    if (estimate?.quota !== undefined) {
+      setAvailableBytes(Math.max(0, estimate.quota - (estimate.usage ?? 0)));
+    }
 
-    async function checkLocalCache() {
-      const attempt = initAttemptRef.current + 1;
-      initAttemptRef.current = attempt;
-      setModelStatus('checking-cache');
-      const storageEstimate = navigator.storage?.estimate
-        ? navigator.storage.estimate().catch(() => null)
-        : Promise.resolve(null);
-      const [manifest, estimate] = await Promise.all([
-        readCacheManifest(),
-        storageEstimate,
-      ]);
-      if (attempt !== initAttemptRef.current) return;
-      if (estimate?.quota !== undefined) {
-        setAvailableBytes(Math.max(0, estimate.quota - (estimate.usage ?? 0)));
-      }
+    // 清单本身有效，但缓存的是另一个后端的量化文件：停下来让用户选，
+    // 两个选项（下载首选 / 改回已缓存）都得由用户点一下才发生。
+    if (
+      manifest
+      && settings.backend !== 'auto'
+      && manifest.backend !== settings.backend
+      && checkCacheMatch(manifest, { modelId: MODEL_ID, revision: REVISION })
+    ) {
+      setBackendMismatch({ cached: manifest.backend, preferred: settings.backend });
+      setModelStatus('uninitialized');
+      return;
+    }
+    setBackendMismatch(null);
 
-      const expectedDtype = manifest?.backend === 'wasm' ? QUANT.wasm : QUANT.webgpu;
-      if (checkCacheMatch(manifest, {
-        modelId: MODEL_ID,
-        revision: REVISION,
-        backend: manifest?.backend,
-        dtype: expectedDtype,
-      })) {
-        // 有匹配的完整清单，尝试 cacheOnly 自动恢复
-        try {
-          const api = getApi();
-          const res = await api.init(
-            { modelId: MODEL_ID, revision: REVISION, quant: QUANT, backend: manifest!.backend, cacheOnly: true },
-            createProgressHandler(attempt),
-          );
-          if (attempt !== initAttemptRef.current) return;
-          if (res.ready) {
-            setModelBackend(res.backend);
-            setModelStatus('ready');
-            return;
-          }
-        } catch (e: unknown) {
-          if (attempt !== initAttemptRef.current) return;
-          console.warn('[wisp] cache-only restore failed:', e);
-          if (!isCacheRestoreFailure(e) && manifest!.backend === 'webgpu') {
-            // WebGPU 初始化失败，进入需要用户选择状态，不破坏已存在的模型缓存
-            setModelStatus('needs-user-choice', {
-              code: 'WEBGPU_UNAVAILABLE',
-              message: 'WebGPU 加载失败，您可以尝试切换 WASM 模式恢复。',
-              retryable: true,
-            });
-            return;
-          }
-          // 缓存残缺或损坏
-          await clearCacheManifest();
-          await purgeModelCacheEntries(MODEL_ID, REVISION);
-          if (attempt !== initAttemptRef.current) return;
-          setModelStatus('error', {
-            code: 'CACHE_CORRUPT',
-            message: '本地模型缓存损坏，请重新下载。',
+    const expectedDtype = manifest?.backend === 'wasm' ? QUANT.wasm : QUANT.webgpu;
+    if (checkCacheMatch(manifest, {
+      modelId: MODEL_ID,
+      revision: REVISION,
+      backend: manifest?.backend,
+      dtype: expectedDtype,
+    })) {
+      // 有匹配的完整清单，尝试 cacheOnly 自动恢复
+      try {
+        const api = getApi();
+        const res = await api.init(
+          { modelId: MODEL_ID, revision: REVISION, quant: QUANT, backend: manifest!.backend, cacheOnly: true },
+          createProgressHandler(attempt),
+        );
+        if (attempt !== initAttemptRef.current) return;
+        if (res.ready) {
+          setModelBackend(res.backend);
+          setModelStatus('ready');
+          return;
+        }
+      } catch (e: unknown) {
+        if (attempt !== initAttemptRef.current) return;
+        console.warn('[wisp] cache-only restore failed:', e);
+        if (!isCacheRestoreFailure(e) && manifest!.backend === 'webgpu') {
+          // WebGPU 初始化失败，进入需要用户选择状态，不破坏已存在的模型缓存
+          setModelStatus('needs-user-choice', {
+            code: 'WEBGPU_UNAVAILABLE',
+            message: 'WebGPU 加载失败，您可以尝试切换 WASM 模式恢复。',
             retryable: true,
           });
           return;
         }
-      }
-
-      if (manifest) {
+        // 缓存残缺或损坏
         await clearCacheManifest();
+        await purgeModelCacheEntries(MODEL_ID, REVISION);
         if (attempt !== initAttemptRef.current) return;
-      }
-
-      // 没有有效清单，检查 Cache API 中是否有旧文件
-      const legacyExist = await hasModelCacheEntries(MODEL_ID, REVISION);
-      if (attempt !== initAttemptRef.current) return;
-      if (legacyExist) {
-        setHasLegacyCache(true);
-        setModelStatus('uninitialized');
-      } else {
-        setModelStatus('uninitialized');
+        setModelStatus('error', {
+          code: 'CACHE_CORRUPT',
+          message: '本地模型缓存损坏，请重新下载。',
+          retryable: true,
+        });
+        return;
       }
     }
 
+    if (manifest) {
+      await clearCacheManifest();
+      if (attempt !== initAttemptRef.current) return;
+    }
+
+    // 没有有效清单，检查 Cache API 中是否有旧文件
+    const legacyExist = await hasModelCacheEntries(MODEL_ID, REVISION);
+    if (attempt !== initAttemptRef.current) return;
+    if (legacyExist) {
+      setHasLegacyCache(true);
+      setModelStatus('uninitialized');
+    } else {
+      setModelStatus('uninitialized');
+    }
+  }
+
+  // 挂载时校验本地缓存
+  useEffect(() => {
+    if (initAttemptLock.current) return;
+    initAttemptLock.current = true;
     void checkLocalCache();
     return () => {
       initAttemptRef.current += 1;
     };
   }, []);
 
+  /** 改回已缓存的那个后端：写设置 → 重跑校验，随后走既有的 cacheOnly 恢复，不触发下载。 */
+  const handleUseCachedBackend = async (backend: 'webgpu' | 'wasm') => {
+    await saveSettings({ backend });
+    setBackendMismatch(null);
+    await checkLocalCache();
+  };
+
   const handleStartDownload = async (backend: 'webgpu' | 'wasm' = 'webgpu') => {
     const attempt = initAttemptRef.current + 1;
     initAttemptRef.current = attempt;
+    // 进度条要按这次实际下载的那套量化文件报体积：q8 比 q4f16 大 48 MB，
+    // 沿用 WebGPU 的 570 会让兼容模式的进度冲过 100%，与「如实告知体积」相悖。
+    setDownloadingBackend(backend);
     setModelStatus('downloading');
     setModelBackend(null);
     setError(null);
+    setBackendMismatch(null);
     setDownloadPct(0);
     setCurrentFile('');
 
@@ -304,6 +350,7 @@ export const ModelSetup: React.FC = () => {
         purgeModelCacheEntries(MODEL_ID, REVISION),
       ]);
       setHasLegacyCache(false);
+      setBackendMismatch(null);
       setModelBackend(null);
       setModelStatus('uninitialized');
       setCacheNotice('模型缓存已清理');
@@ -338,7 +385,8 @@ export const ModelSetup: React.FC = () => {
   }
 
   if (modelStatus === 'downloading') {
-    const downloadedMb = Math.round(MODEL_SIZE_MB * downloadPct / 100);
+    const totalMb = downloadingBackend === 'wasm' ? WASM_MODEL_SIZE_MB : MODEL_SIZE_MB;
+    const downloadedMb = Math.round(totalMb * downloadPct / 100);
     return (
       <section className="wisp-setup-container" aria-live="polite" aria-busy="true">
         <SetupThread status={modelStatus} hasCache={hasLegacyCache} />
@@ -360,7 +408,7 @@ export const ModelSetup: React.FC = () => {
 
           <div className="wisp-progress-info">
             <strong>{downloadPct.toFixed(1)}%</strong>
-            <span>约 {downloadedMb} MB / {MODEL_SIZE_MB} MB</span>
+            <span>约 {downloadedMb} MB / {totalMb} MB</span>
           </div>
           {currentFile ? <div className="wisp-file-tag" title={currentFile}>{currentFile}</div> : null}
 
@@ -393,6 +441,36 @@ export const ModelSetup: React.FC = () => {
             </button>
             <button className="wisp-btn wisp-btn-secondary" onClick={() => void handleStartDownload('webgpu')}>
               重试 WebGPU
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (backendMismatch) {
+    return (
+      <section className="wisp-setup-container" aria-live="polite">
+        <SetupThread status={modelStatus} hasCache={hasLegacyCache} />
+        <div className="wisp-setup-panel">
+          <p className="wisp-setup-kicker">后端切换</p>
+          <h2 className="wisp-setup-heading">首选后端的权重尚未下载</h2>
+          <p className="wisp-setup-intro">
+            本机缓存的是{BACKEND_LABEL[backendMismatch.cached]}的权重。
+            {BACKEND_LABEL[backendMismatch.preferred]}使用另一套量化文件，需要重新下载一次才能运行。
+          </p>
+          <div className="wisp-btn-group">
+            <button
+              className="wisp-btn wisp-btn-primary"
+              onClick={() => void handleStartDownload(backendMismatch.preferred)}
+            >
+              下载{BACKEND_LABEL[backendMismatch.preferred]}权重
+            </button>
+            <button
+              className="wisp-btn wisp-btn-secondary"
+              onClick={() => void handleUseCachedBackend(backendMismatch.cached)}
+            >
+              改回{BACKEND_LABEL[backendMismatch.cached]}
             </button>
           </div>
         </div>

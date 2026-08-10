@@ -4,12 +4,14 @@
  * 与 `TaskPanel.tsx` 的 `ensureSession` 都是 `get('retentionDays')` 直读），
  * 换成嵌套结构会逼这两个热点文件跟着改，收益却只是「看起来整齐」。
  */
+import { MODEL_ID } from '../inference/modelIdentity';
+
 
 /**
- * 与 `entrypoints/sidepanel/components/ModelSetup.tsx` 的 `MODEL_ID` 同值。
- * 不 import 那个 React 组件：core 层不该反向依赖 UI 层，改动时两处一起改。
+ * 白名单只有当前这一个模型。常量已下沉到 `core/inference/modelIdentity.ts`，
+ * 直接引用即可，不必再手工同步两份字面量。
  */
-const MODEL_IDS = ['onnx-community/Qwen3-0.6B-ONNX'] as const;
+const MODEL_IDS = [MODEL_ID] as const;
 
 const BACKENDS = ['auto', 'webgpu', 'wasm'] as const;
 const RETENTIONS = [7, 0] as const;
