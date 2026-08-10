@@ -56,8 +56,16 @@ export type PanelToBackground =
 export type BackgroundToPanel =
   | { type: 'ACTIVE_TAB'; tabId: number; epoch: number }
   // 面板已打开时的主投递路径；面板冷启动时走 PANEL_READY 拉取。两条路径都带 id，Panel 按 id 去重。
-  | { type: 'PENDING_ACTION'; id: Uuid; action: SelectionAction; text: string; ctx: TaskContext }
+  | { type: 'PENDING_ACTION'; id: Uuid; action: SelectionAction; text: string; lang: Lang;
+      ctx: TaskContext }
   | { type: 'EPOCH_INVALIDATED'; tabId: number; epoch: number };
+
+// —— runtime：Service Worker → Content Script —— //
+// 这两条此前都是裸对象字面量（background.ts 的 ensureContentScript 探活、
+// 以及 sidePanel.open() 失败后的手势退路提示），发什么类型编译器都不管。
+export type BackgroundToContent =
+  | { type: 'PING' }              // 探活，CS 回 { type: 'PONG' }
+  | { type: 'OPEN_PANEL_HINT' };  // 面板无法程序化打开时，请 CS 就地提示用户点图标
 
 // —— runtime 响应体（sendResponse 的形状，Panel 侧按此解构）—— //
 export interface ActiveTabInfo { tabId: number; epoch: number; }
@@ -74,5 +82,8 @@ export interface PendingActionEntry {
   id: Uuid;
   action: SelectionAction;
   text: string;
+  // CS 发 TOOLBAR_ACTION 时已按选区判定过一次语言，SW 原样透传，
+  // 免得 Panel 对同一段文本再判一遍（两次判定还可能给出不同结果）。
+  lang: Lang;
   ctx: TaskContext;
 }

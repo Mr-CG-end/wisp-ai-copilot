@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PendingActionStore, PENDING_TTL_MS } from './pending';
 
 const ctx = { tabId: 1, url: 'https://example.com/a', epoch: 2 };
-const entry = { id: 'act-1', action: 'explain' as const, text: '选中的文字', ctx };
+const entry = { id: 'act-1', action: 'explain' as const, text: '选中的文字', lang: 'zh' as const, ctx };
 
 describe('PendingActionStore', () => {
   it('put 后可在 TTL 内取出一次', () => {

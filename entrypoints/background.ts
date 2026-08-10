@@ -151,6 +151,7 @@ export default defineBackground(() => {
               id: crypto.randomUUID(),
               action: msg.action,
               text: msg.text,
+              lang: msg.lang,
               ctx: { tabId, url: msg.url, epoch: epochs.get(tabId) },
             };
             pending.put(entry, Date.now());
