@@ -1,122 +1,392 @@
+import { createElement, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
+import { createRoot, type Root } from 'react-dom/client';
+import type { ShadowRootContentScriptUi } from 'wxt/utils/content-script-ui/shadow-root';
+import { SelectionToolbar } from '../components/SelectionToolbar';
+import { TOOLBAR_CSS } from '../components/selectionToolbarCss';
 import { extractArticle } from '../core/extract/article';
+import { detectLang, isSelectionUsable, normalizeSelection } from '../core/extract/selection';
+import { isSensitiveSelection } from '../core/extract/sensitive';
 import { shouldInvalidateNavigation } from '../core/messaging/navigation';
+import { clampToolbarPosition, type ToolbarPositionInput } from '../core/panel/toolbarPosition';
 import {
   PORT_NAME,
+  type BackgroundToContent,
   type ContentToBackground,
   type ContentToPanel,
+  type Lang,
   type PanelToContent,
+  type SelectionAction,
 } from '../core/messaging/types';
+
+/**
+ * 选区稳定判定的防抖窗口。阶段门要求「选区稳定后 ≤150ms 出现工具条」，
+ * 这 150ms 里还要装下 Shadow Root 创建与 React 首次挂载，防抖必须显著小于它。
+ */
+const SELECTION_SETTLE_MS = 70;
+
+/**
+ * 面板无法程序化打开时的兜底提示（SW 的 sidePanel.open 失败后发 OPEN_PANEL_HINT）。
+ * 不写「点击 Wisp 图标」：v0.1 还没有图标资产，用户认不出哪个是它。
+ */
+const OPEN_PANEL_HINT_TEXT = '点击浏览器工具栏上的扩展图标继续';
 
 export default defineContentScript({
   registration: 'runtime',
   matches: [],
-  main() {
+  main(ctx) {
     const w = window as unknown as { __wisp?: true };
     if (w.__wisp) return;
     w.__wisp = true;
 
-    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-      if (msg?.type === 'PING') sendResponse({ type: 'PONG' });
-      return false;
+    // —— Side Panel 的 Port。面板没打开时为 null，工具条链路不依赖它 —— //
+    let panelPort: chrome.runtime.Port | null = null;
+    const sendToPanel = (msg: ContentToPanel) => {
+      try {
+        panelPort?.postMessage(msg);
+      } catch {
+        /* 面板已关闭，忽略 */
+      }
+    };
+
+    // ————————————————— 划词工具条 ————————————————— //
+
+    let toolbarUi: ShadowRootContentScriptUi<Root> | null = null;
+    let toolbarUiPromise: Promise<ShadowRootContentScriptUi<Root>> | null = null;
+    /** 当前选区快照。按钮发出去的是它，不是点击那一刻的 window.getSelection()。 */
+    let pending: { text: string; lang: Lang } | null = null;
+    /** 就地反馈/提示播放中：其间不再重算选区，否则自己触发的 mouseup 会打断动效。 */
+    let holding = false;
+    /** 上一次的落点依据（视口坐标）；OPEN_PANEL_HINT 靠它回到工具条原位。 */
+    let lastRect: ToolbarPositionInput['rect'] | null = null;
+    let settleTimer = 0;
+    let showSeq = 0;
+
+    /**
+     * Shadow Root 全页只建一次。
+     *
+     * createShadowRootUi 每次调用都会往 ctx.onInvalidated 挂一个 remove，
+     * 「每次显示都新建」在反复划词后会累积几十个监听器与几十个 shadow host；
+     * 复用同一个实例也天然满足「任意时刻只有一个工具条」。
+     */
+    function ensureToolbarUi(): Promise<ShadowRootContentScriptUi<Root>> {
+      if (!toolbarUiPromise) {
+        toolbarUiPromise = createShadowRootUi<Root>(ctx, {
+          // 两段 kebab-case 是 attachShadow 对自定义元素名的硬性要求
+          name: 'wisp-selection-toolbar',
+          position: 'overlay',
+          anchor: 'body',
+          // 样式以字符串传入：这条路径直接写进 shadow 内 <style>.textContent，
+          // 不 fetch、不依赖构建产物可达性（见 selectionToolbarCss.ts 顶部注释）。
+          css: TOOLBAR_CSS,
+          onMount(container) {
+            // 定位用 fixed + 视口坐标：overlay 模式把 shadowHost 追加在 body 末尾，
+            // 换成 absolute + scrollY 会以那个静态流位置为原点，工具条会掉到页面底部。
+            container.style.position = 'fixed';
+            container.style.margin = '0';
+            container.style.zIndex = '2147483647';
+            container.style.display = 'none';
+            return createRoot(container);
+          },
+          onRemove: (root) => root?.unmount(),
+        })
+          .then((ui) => {
+            ui.mount();
+            toolbarUi = ui;
+            return ui;
+          })
+          .catch((error) => {
+            // 清掉缓存，下一次划词还能再试（例如这一刻 body 恰好还不存在）
+            toolbarUiPromise = null;
+            throw error;
+          });
+      }
+      return toolbarUiPromise;
+    }
+
+    /** 同步提交：落点要按真实尺寸算，React 18 默认的异步提交会让紧随其后的测量读到 0。 */
+    function renderToolbar(ui: ShadowRootContentScriptUi<Root>, node: ReactNode): void {
+      flushSync(() => ui.mounted?.render(node));
+    }
+
+    /** 先以不可见状态量出真实尺寸再落位：宽度由文字撑开，写死会在别的字体下裁掉字。 */
+    function placeAt(
+      ui: ShadowRootContentScriptUi<Root>,
+      rect: ToolbarPositionInput['rect'],
+      node: ReactNode,
+    ): void {
+      const container = ui.uiContainer;
+      container.style.display = 'block';
+      container.style.visibility = 'hidden';
+      container.style.left = '0';
+      container.style.top = '0';
+      renderToolbar(ui, node);
+      const box = container.getBoundingClientRect();
+      const { left, top } = clampToolbarPosition({
+        rect,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        size: { width: box.width, height: box.height },
+      });
+      container.style.left = `${left}px`;
+      container.style.top = `${top}px`;
+      container.style.visibility = 'visible';
+    }
+
+    /** 只收起 UI，不动 pending —— showToolbar() 依赖这一点。 */
+    function teardownUi(): void {
+      holding = false;
+      if (!toolbarUi) return;
+      toolbarUi.uiContainer.style.display = 'none';
+      // 渲染空树：不给宿主页面的 Tab 序列留下四个隐形按钮
+      toolbarUi.mounted?.render(null);
+    }
+
+    /**
+     * 对外的「隐藏工具条」：连同待发送的选区快照一起丢弃。
+     *
+     * showToolbar() 内部只能调 teardownUi()：那时 pending 刚被赋值，
+     * 用 hide() 会把它清空，按钮点下去时 pending === null 直接 return ——
+     * 工具条看起来完全正常，点击却毫无反应。
+     */
+    function hide(): void {
+      teardownUi();
+      pending = null;
+    }
+
+    /**
+     * 上报走 chrome.runtime.sendMessage 而不是 Port：面板侧的 Port 是单槽位 + 8s 超时，
+     * busy 时直接 reject PORT_BUSY，走 Port 会和 EXTRACT / GET_SELECTION 抢槽位。
+     * SW 侧已实现 put pending + 广播 + sidePanel.open + 失败降级。
+     */
+    function sendAction(action: SelectionAction): void {
+      // 组件已经切到反馈态，因此无论有没有快照可发都要先挡住选区重算，
+      // 否则紧随其后的 mouseup 会把 1.5s 的动效顶掉
+      holding = true;
+      if (!pending) return;
+      const msg: ContentToBackground = {
+        type: 'TOOLBAR_ACTION',
+        action,
+        text: pending.text,
+        url: location.href,
+        lang: pending.lang,
+      };
+      void chrome.runtime.sendMessage(msg).catch(() => undefined);
+    }
+
+    async function showToolbar(rect: ToolbarPositionInput['rect']): Promise<void> {
+      const seq = ++showSeq;
+      let ui: ShadowRootContentScriptUi<Root>;
+      try {
+        ui = await ensureToolbarUi();
+      } catch (error) {
+        console.error('[wisp] 划词工具条挂载失败', error);
+        return;
+      }
+      // await 期间选区可能已变或已被判掉，只认最后一次请求
+      if (seq !== showSeq || !pending) return;
+      teardownUi();
+      lastRect = rect;
+      placeAt(
+        ui,
+        rect,
+        createElement(SelectionToolbar, {
+          // 每次显示都是新实例：上一次的反馈态不会被 React 复用
+          key: seq,
+          onAction: sendAction,
+          onDismiss: hide,
+        }),
+      );
+    }
+
+    /** OPEN_PANEL_HINT 渲染在工具条原位：它是工具条的一个状态，不是另开一个浮层。 */
+    function showHint(): void {
+      const rect = lastRect;
+      if (!rect) return; // 没弹过工具条就没有落点；这条提示只会紧跟一次点击到来
+      void ensureToolbarUi()
+        .then((ui) => {
+          holding = true;
+          placeAt(
+            ui,
+            rect,
+            createElement(SelectionToolbar, {
+              key: `hint-${++showSeq}`,
+              hint: OPEN_PANEL_HINT_TEXT,
+              onAction: sendAction,
+              onDismiss: hide,
+            }),
+          );
+        })
+        .catch(() => undefined);
+    }
+
+    /** 判定顺序不可调换：折叠 → 敏感 → 长度 → 落点。敏感命中时根本不读取文本。 */
+    function handleSelectionSettled(): void {
+      if (holding) return;
+      // 焦点已经在工具条里（Tab 进了按钮）：此刻的选区读数不代表用户改了选择。
+      // 这一条必须排在折叠判定之前，否则「聚焦按钮顺带清掉选区」会把工具条自己收走。
+      if (toolbarUi && document.activeElement === toolbarUi.shadowHost) return;
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+        hide();
+        return;
+      }
+      if (isSensitiveSelection(selection)) {
+        hide();
+        return;
+      }
+      const text = normalizeSelection(selection.toString());
+      if (!isSelectionUsable(text)) {
+        hide();
+        return;
+      }
+      const rect = selection.getRangeAt(0).getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        hide(); // 落在不可见节点上的选区没有可用落点
+        return;
+      }
+      pending = { text, lang: detectLang(text) };
+      void showToolbar(rect);
+    }
+
+    // ————————————————— 导航 ————————————————— //
+
+    // SPA 的 pushState/replaceState 既不销毁 Content Script，也不一定触发
+    // tabs.onUpdated(status:'loading') —— 少了这一路，SPA 换页后旧任务会被当成仍然有效。
+    // Navigation API（Chrome 102+）覆盖 History 与 popstate 两种情况；popstate 作为兜底。
+    // 这一段整体移出了 onConnect：它同时负责作废工具条，而工具条在面板没打开时也存在。
+    let lastUrl = location.href;
+    let lastScrollAt = Number.NEGATIVE_INFINITY;
+    const notifyNavigation = (
+      nextUrl: string,
+      navigationType?: string,
+      sameDocument?: boolean,
+    ) => {
+      if (!shouldInvalidateNavigation({
+        currentUrl: lastUrl,
+        nextUrl,
+        navigationType,
+        sameDocument,
+        msSinceScroll: performance.now() - lastScrollAt,
+      })) {
+        lastUrl = nextUrl;
+        return;
+      }
+      lastUrl = nextUrl;
+      // 选区随导航一并作废。这同时堵住一个 epoch 时序漏洞：用户选中文本 → SPA 跳转 →
+      // 再点工具条按钮，SW 填进 ctx 的会是跳转后的新 epoch，校验反而会误判通过。
+      // 跳转即销毁工具条，这个场景根本无法发生。
+      lastRect = null;
+      hide();
+      sendToPanel({ type: 'PAGE_NAVIGATED', url: nextUrl });
+      const backgroundMessage: ContentToBackground = { type: 'PAGE_NAVIGATED', url: nextUrl };
+      void chrome.runtime.sendMessage(backgroundMessage).catch(() => undefined);
+    };
+    let pendingNavigation: {
+      url: string;
+      navigationType?: string;
+      sameDocument?: boolean;
+    } | null = null;
+    const onNavigate = (event: Event) => {
+      const navigationEvent = event as Event & {
+        destination?: { url?: string; sameDocument?: boolean };
+        navigationType?: string;
+      };
+      pendingNavigation = {
+        url: navigationEvent.destination?.url ?? location.href,
+        navigationType: navigationEvent.navigationType,
+        sameDocument: navigationEvent.destination?.sameDocument,
+      };
+    };
+    const onNavigateSuccess = () => {
+      const completed = pendingNavigation;
+      pendingNavigation = null;
+      notifyNavigation(
+        completed?.url ?? location.href,
+        completed?.navigationType,
+        completed?.sameDocument,
+      );
+    };
+    const onPopState = () => notifyNavigation(location.href, 'traverse', true);
+    const nav = (window as unknown as { navigation?: EventTarget }).navigation;
+    if (nav) {
+      ctx.addEventListener(nav, 'navigate', onNavigate);
+      ctx.addEventListener(nav, 'navigatesuccess', onNavigateSuccess);
+    } else {
+      ctx.addEventListener(window, 'popstate', onPopState);
+    }
+    ctx.addEventListener(window, 'pagehide', () => sendToPanel({ type: 'PAGE_UNLOADING' }), {
+      once: true,
+    });
+
+    // ————————————————— 选区监听 ————————————————— //
+
+    // 挂在 main() 顶层而不是 onConnect 回调里：面板没打开就没有 Port，
+    // 挂在回调里等于「不开面板就永远不出工具条」。
+    const scheduleSettle = () => {
+      window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(handleSelectionSettled, SELECTION_SETTLE_MS);
+    };
+    ctx.addEventListener(document, 'selectionchange', scheduleSettle);
+    // selectionchange 在拖选途中一路触发；mouseup / keyup 补的是「松手那一刻」，
+    // 双击选词与 Shift+方向键都靠它们收尾。
+    ctx.addEventListener(document, 'mouseup', scheduleSettle);
+    ctx.addEventListener(document, 'keyup', scheduleSettle);
+    ctx.addEventListener(document, 'keydown', (event) => {
+      if (event.key === 'Escape') hide();
+    });
+
+    /** 滚动、缩放即隐藏（不跟随）：落点是视口坐标，视口一动就不再成立。 */
+    const onViewportChange = () => {
+      lastRect = null;
+      hide();
+    };
+    // capture: true —— scroll 不冒泡，内层滚动容器的滚动只有捕获阶段收得到。
+    // 顺带记下滚动时刻，供 shouldInvalidateNavigation 区分「滚动式 replaceState」。
+    ctx.addEventListener(
+      window,
+      'scroll',
+      () => {
+        lastScrollAt = performance.now();
+        onViewportChange();
+      },
+      { passive: true, capture: true },
+    );
+    ctx.addEventListener(window, 'resize', onViewportChange, { passive: true });
+
+    // ————————————————— 消息 ————————————————— //
+
+    chrome.runtime.onMessage.addListener((msg: BackgroundToContent, _sender, sendResponse) => {
+      switch (msg?.type) {
+        case 'PING':
+          sendResponse({ type: 'PONG' });
+          return false;
+        case 'OPEN_PANEL_HINT':
+          showHint();
+          return false;
+        default:
+          return false;
+      }
     });
 
     chrome.runtime.onConnect.addListener((port) => {
       if (port.name !== PORT_NAME) return;
-
-      const send = (msg: ContentToPanel) => {
-        try {
-          port.postMessage(msg);
-        } catch {
-          /* 面板已关闭，忽略 */
-        }
-      };
-
-      const onPageHide = () => send({ type: 'PAGE_UNLOADING' });
-      window.addEventListener('pagehide', onPageHide, { once: true });
-
-      // SPA 的 pushState/replaceState 既不销毁 Content Script，也不一定触发
-      // tabs.onUpdated(status:'loading') —— 少了这一路，SPA 换页后旧任务会被当成仍然有效。
-      // Navigation API（Chrome 102+）覆盖 History 与 popstate 两种情况；popstate 作为兜底。
-      let lastUrl = location.href;
-      let lastScrollAt = Number.NEGATIVE_INFINITY;
-      const onScroll = () => {
-        lastScrollAt = performance.now();
-      };
-      const notifyNavigation = (
-        nextUrl: string,
-        navigationType?: string,
-        sameDocument?: boolean,
-      ) => {
-        if (!shouldInvalidateNavigation({
-          currentUrl: lastUrl,
-          nextUrl,
-          navigationType,
-          sameDocument,
-          msSinceScroll: performance.now() - lastScrollAt,
-        })) {
-          lastUrl = nextUrl;
-          return;
-        }
-        lastUrl = nextUrl;
-        send({ type: 'PAGE_NAVIGATED', url: nextUrl });
-        const backgroundMessage: ContentToBackground = { type: 'PAGE_NAVIGATED', url: nextUrl };
-        void chrome.runtime.sendMessage(backgroundMessage).catch(() => undefined);
-      };
-      let pendingNavigation: {
-        url: string;
-        navigationType?: string;
-        sameDocument?: boolean;
-      } | null = null;
-      const onNavigate = (event: Event) => {
-        const navigationEvent = event as Event & {
-          destination?: { url?: string; sameDocument?: boolean };
-          navigationType?: string;
-        };
-        pendingNavigation = {
-          url: navigationEvent.destination?.url ?? location.href,
-          navigationType: navigationEvent.navigationType,
-          sameDocument: navigationEvent.destination?.sameDocument,
-        };
-      };
-      const onNavigateSuccess = () => {
-        const completed = pendingNavigation;
-        pendingNavigation = null;
-        notifyNavigation(
-          completed?.url ?? location.href,
-          completed?.navigationType,
-          completed?.sameDocument,
-        );
-      };
-      const onPopState = () => notifyNavigation(location.href, 'traverse', true);
-      const nav = (window as unknown as { navigation?: EventTarget }).navigation;
-      if (nav) {
-        nav.addEventListener('navigate', onNavigate);
-        nav.addEventListener('navigatesuccess', onNavigateSuccess);
-        window.addEventListener('scroll', onScroll, { passive: true });
-      } else {
-        window.addEventListener('popstate', onPopState);
-      }
-
+      panelPort = port;
       port.onDisconnect.addListener(() => {
-        window.removeEventListener('pagehide', onPageHide);
-        window.removeEventListener('scroll', onScroll);
-        window.removeEventListener('popstate', onPopState);
-        nav?.removeEventListener('navigate', onNavigate);
-        nav?.removeEventListener('navigatesuccess', onNavigateSuccess);
+        if (panelPort === port) panelPort = null;
       });
 
       port.onMessage.addListener((msg: PanelToContent) => {
-        const ctx = { tabId: -1, url: location.href, epoch: msg.epoch };
+        const taskCtx = { tabId: -1, url: location.href, epoch: msg.epoch };
 
         if (msg.type === 'EXTRACT') {
           const article = extractArticle(document);
           if (!article) {
-            send({ type: 'ERROR', code: 'PAGE_NO_CONTENT', message: '当前页面没有可读正文' });
+            sendToPanel({ type: 'ERROR', code: 'PAGE_NO_CONTENT', message: '当前页面没有可读正文' });
             return;
           }
-          send({
+          sendToPanel({
             type: 'EXTRACTED',
-            ctx,
+            ctx: taskCtx,
             title: article.title,
             text: article.text,
             charCount: article.charCount,
@@ -127,8 +397,9 @@ export default defineContentScript({
         }
 
         if (msg.type === 'GET_SELECTION') {
-          const raw = window.getSelection()?.toString() ?? '';
-          send({ type: 'SELECTION', ctx, text: raw, lang: 'other' });
+          // 语言按真实文本判定，不再硬编码 'other'：Panel 拿到的 lang 直接决定翻译方向
+          const text = normalizeSelection(window.getSelection()?.toString() ?? '');
+          sendToPanel({ type: 'SELECTION', ctx: taskCtx, text, lang: detectLang(text) });
         }
       });
     });
