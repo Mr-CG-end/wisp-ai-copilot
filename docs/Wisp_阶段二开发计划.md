@@ -38,7 +38,8 @@
 | 轨迹 UI 重构 | 已完成 | 计划外插入的一轮 UI 升级，11 个提交 (2253101～e427c7a)：新增纯函数投影层 `core/panel/thread.ts` 把 store 三字段合成轮次数组，渲染层拆出 `Thread`/`Turn`/`SnapshotStamp`，`PageInfo` 增 `readAt`，UISpec 升 v3。依据 `docs/superpowers/specs/2026-07-27-wisp-thread-ui-design.md`，实施脚本见 `docs/superpowers/plans/2026-07-27-wisp-thread-ui.md` |
 | 审查报告后续修复 | 已完成 | 8 个提交 (25d8fb8～aa82727)：摘要选段排除无语义短行与预留开头预算、摘要提示词先给主旨句并匹配正文语言、正文抽取保留块级边界、接入正文抽取质量评测（需外部语料，未安装时整组跳过）、申请常驻主机权限并修正模型体积显示 |
 | 测试基线 | — | 31 文件 176 项通过 1 项跳过（跳过的是需外部 clone 语料的抽取评测 bench），`tsc --noEmit` 与 `build:dev` 均通过 |
-| Task 10～14 | 待执行 | 已按 M3/M4 方案重划分为 9 个工作包，并修正本文三处失效内容，见下方 §0.1.1 |
+| M3 第一波 (W1) | 已完成 | 四个纯逻辑包并行落地，5 个提交 (a23ef5b～6638fe5)：① UISpec 升 v3.1 补 §5.11 设置页与 §5.12 错误分层矩阵；② `BackgroundToContent` 消息契约 + `PendingActionEntry.lang` 透传 + `core/panel/errorCopy.ts` 十四码文案分层表；③ `core/storage/settings.ts`（三字段，无 `outputLength`）+ `usage.ts` + `countModelCacheEntries`；④ `core/extract/selection.ts`/`sensitive.ts` + `core/panel/selectionBudget.ts`/`toolbarPosition.ts`；⑤ store 归档判据修正。测试 38 文件 280 项通过 1 跳过，`tsc --noEmit` 退出码 0 |
+| Task 10～14 | 部分执行 | 已按 M3/M4 方案重划分为 9 个工作包，W1 完成，W2（设置页 UI / Shadow DOM 工具条 / 划词交付握手）起需真机核对。本文三处失效内容见下方 §0.1.1 |
 
 > 执行时每完成一个任务，在此表补一行状态与证据（沿用阶段一文档的进度同步方式）；Task 14 完成后在本节写入阶段门结论。
 
