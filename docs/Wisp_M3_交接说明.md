@@ -6,7 +6,9 @@
 > 验证状态：`npm test` = 39 文件 300 项通过 1 跳过；`npx tsc --noEmit` = 0；`npm run build` 通过。
 > 跳过的那 1 项是 `core/bench/extractionCorpus.bench.ts`，需要外部 clone 语料（`git clone --depth 1 https://github.com/scrapinghub/article-extraction-benchmark bench-corpus`），未安装时整组跳过。**跳过不等于通过**，阶段门里要如实标注。
 >
-> ⚠️ **两条会误导冷启动判断的事，先看 §10 与 §11**：① 三份计划文档共 197 个复选框全部未勾选，但对应工作大多已完成，进度以 `Wisp_阶段二开发计划.md` §0.1 的表格为准；② 仓库无 CI、无 lint/format、无 hooks，所有约定都是散文而非可执行护栏。
+> ⚠️ **两条会误导冷启动判断的事，先看 §10 与 §11**：① 三份计划文档共 197 个复选框全部未勾选，但对应工作大多已完成，进度以 `Wisp_阶段二开发计划.md` §0.1 的表格为准；② 本交接基线当时无 CI、无 lint/format、无 hooks，后续护栏落地状态见下一段。
+>
+> **2026-08-10 后续更新**：§11 的前三项护栏已落地——新增生产 manifest 断言、`ErrorCode` 触达检查、GitHub Actions CI 与统一的 `npm run verify`；Vitest 也已覆盖根级 `components/` 和 `tests/`。完整验证为 41 文件 317 项通过、1 文件 1 项因缺外部语料跳过，生产构建及构建后的 manifest 断言通过。lint/format 与 hooks 仍未配置；远端 CI 需推送后确认首跑结果。§11 保留原始审计与设计理由，当前状态以本段为准。
 
 ---
 
@@ -212,11 +214,13 @@ if (!isCacheRestoreFailure(e) && manifest!.backend === 'webgpu') → needs-user-
 
 ---
 
-## 11. 工程化护栏：约定很强，机制几乎为零（待补，按优先级）
+## 11. 工程化护栏：原始审计与落地记录
 
-`.github/`、`.husky/`、eslint、prettier **全部不存在**，仓库里只有 `vitest.config.ts` 与 `wxt.config.ts` 两个配置。`AGENTS.md` 自己也写明「当前未配置 formatter / linter 脚本」。
+落地状态：① manifest 断言测试、② `ErrorCode` 触达覆盖检查、③ CI 均已完成；④ lint / format 仍按原建议暂缓。未引入 Git hooks：本轮以不可绕过的远端 CI 为强制门，本地统一入口为 `npm run verify`。
 
-也就是说：**所有护栏都是散文，不是可执行物**，遵守它们靠执行者读了文档并选择照做，仓库本身不阻止任何事。这不是抽象缺陷，已经咬人三次：
+在 `ecbfe35` 基线时，`.github/`、`.husky/`、eslint、prettier **全部不存在**，仓库里只有 `vitest.config.ts` 与 `wxt.config.ts` 两个配置。当前已新增 `.github/workflows/ci.yml`；`.husky/`、eslint、prettier 仍不存在，`AGENTS.md` 也继续如实记录「当前未配置 formatter / linter 脚本」。
+
+这意味着在该基线时：**所有护栏都是散文，不是可执行物**，遵守它们靠执行者读了文档并选择照做，仓库本身不阻止任何事。这不是抽象缺陷，已经咬人三次：
 
 - 14 个 `ErrorCode` 里 5 个从未被写入任何代码路径。`Record<ErrorCode, ...>` 的类型检查只保证**文案表**齐全，保证不了那些码真的会被触发
 - 14 处硬编码错误文案仍散在三个文件里，`ERROR_COPY` 至今只有 1 个消费者，没有任何机制发现这件事
@@ -228,7 +232,7 @@ if (!isCacheRestoreFailure(e) && manifest!.backend === 'webgpu') → needs-user-
 
 **不要把未勾选读成未完成**——轨迹 UI 那份计划的 10 个 Task 全部落地了，复选框一个没动。这套复选框机制事实上是装饰。要么后续开始用，要么在文档头部加一句声明说明它不代表进度；两者选一，别留着继续误导。
 
-### 待补清单（小投入，每条都堵住上面已经发生过的问题）
+### 原始待补清单（当前状态见本节开头）
 
 **① manifest 断言测试**（优先级最高，投入最小）
 

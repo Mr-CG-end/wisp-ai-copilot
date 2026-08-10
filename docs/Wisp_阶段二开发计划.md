@@ -40,6 +40,7 @@
 | 测试基线 | — | 31 文件 176 项通过 1 项跳过（跳过的是需外部 clone 语料的抽取评测 bench），`tsc --noEmit` 与 `build:dev` 均通过 |
 | M3 第一波 (W1) | 已完成 | 四个纯逻辑包并行落地，5 个提交 (a23ef5b～6638fe5)：① UISpec 升 v3.1 补 §5.11 设置页与 §5.12 错误分层矩阵；② `BackgroundToContent` 消息契约 + `PendingActionEntry.lang` 透传 + `core/panel/errorCopy.ts` 十四码文案分层表；③ `core/storage/settings.ts`（三字段，无 `outputLength`）+ `usage.ts` + `countModelCacheEntries`；④ `core/extract/selection.ts`/`sensitive.ts` + `core/panel/selectionBudget.ts`/`toolbarPosition.ts`；⑤ store 归档判据修正。测试 38 文件 280 项通过 1 跳过，`tsc --noEmit` 退出码 0 |
 | M3 第二波 (W2) | 代码已落地，**待真机核对** | 三个包并行，3 个提交 (700d69f～983fcbd)：① F-03 划词交付握手——`sidePanel.open()` 重排到手势同步段、`PANEL_READY` 握手与两路投递按 id 去重、`adoptCtx` 统一绑定提交、TaskPanel 拆三段使无快照时也能渲染轨迹；② Shadow DOM 工具条——`createShadowRootUi` + 内联 CSS 字符串（零 WAR）、`position:fixed` 视口坐标、选区监听移出 `onConnect`；③ 设置页——视图优先切换、后端首选项与重新加载、行内两步确认的清除数据、隐私说明八条。测试 39 文件 300 项通过 1 跳过，`tsc --noEmit` 与 `npm run build` 均通过。**约 45 项真机核对未执行**，见 §0.1.2 |
+| 工程化护栏 | 已完成，**待远端 CI 首跑** | 新增 manifest 权限/CSP 断言、`ErrorCode` 生产路径触达检查、根级组件与结构测试发现范围、统一 `npm run verify` 和 GitHub Actions CI。完整验证：41 文件 317 项通过，1 文件 1 项因缺外部语料跳过；类型检查、生产构建及构建后 manifest 断言通过。未引入 hooks 或 lint/format |
 | Task 10～14 | 部分执行 | 已按 M3/M4 方案重划分为 9 个工作包，W1/W2 代码完成，W3（错误分层收口与可访问性）、W4（回归集与阶段门）待启动。本文三处失效内容见下方 §0.1.1 |
 
 > 执行时每完成一个任务，在此表补一行状态与证据（沿用阶段一文档的进度同步方式）；Task 14 完成后在本节写入阶段门结论。

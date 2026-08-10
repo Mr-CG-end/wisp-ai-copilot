@@ -19,6 +19,7 @@ Use the npm version represented by `package-lock.json`.
 - `npm run build:dev` creates a development build for local inspection.
 - `npm run build` creates the production extension in `.output/`.
 - `npm test` runs the Vitest suite once.
+- `npm run verify` runs type checking, tests, a production build, and the generated-manifest assertions.
 
 ## Coding Style & Naming Conventions
 
@@ -28,7 +29,7 @@ No repository formatter or linter script is currently configured. Match nearby c
 
 ## Testing Guidelines
 
-Vitest runs in the Node environment and discovers `core/**/*.test.ts`, `entrypoints/**/*.test.ts`, `entrypoints/**/*.test.tsx`, and `core/**/*.bench.ts`. Component and hook tests need `// @vitest-environment jsdom` on the first line. Add or update a colocated test whenever changing core behavior. Name tests after the source module, for example `core/inference/backend.test.ts`. There is no configured coverage threshold; prioritize deterministic assertions for state transitions, cancellation, message contracts, and text extraction. Run `npm test` before submitting.
+Vitest runs in the Node environment and discovers tests under `core/`, `components/`, `entrypoints/`, and `tests/`, plus `core/**/*.bench.ts`. Component and hook tests need `// @vitest-environment jsdom` on the first line. Add or update a colocated test whenever changing core behavior. Name tests after the source module, for example `core/inference/backend.test.ts`. There is no configured coverage threshold; prioritize deterministic assertions for state transitions, cancellation, message contracts, text extraction, and extension-manifest invariants. Run `npm run verify` before submitting.
 
 ## Commit & Pull Request Guidelines
 
