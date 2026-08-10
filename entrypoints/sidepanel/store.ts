@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { Lang } from '../../core/inference/contract';
 import type { ErrorCode, TaskContext, Uuid } from '../../core/messaging/types';
 import type { PerformanceProfile } from '../../core/panel/performance';
 
@@ -43,6 +44,10 @@ export interface CurrentTask {
   userInput?: string;
   truncated?: boolean;
   contextChars?: number;
+  /** 翻译轮次的目标语言；留在轮次上，「改目标语言重跑」才有据可依 */
+  targetLang?: Lang;
+  /** 划词轮次的原选区，供结果区顶部回显 */
+  selectionText?: string;
 }
 
 export interface TaskHistoryEntry extends CurrentTask {
@@ -126,10 +131,15 @@ export const usePanelStore = create<PanelStoreState>((set) => ({
 
   startTask: (task, options) => set((state) => {
     const shouldArchive = options?.archiveCurrent !== false;
+    // 终态轮次（empty / cancelled / error）即便零输出也要进历史 —— 否则
+    // 「点了停止但一个字都没出」和「模型返回空结果」会从轨道上凭空蒸发，
+    // 用户看不到「刚才那次失败了」。唯一该丢的是「在途且零输出」的空壳。
+    const isEmptyInFlight = state.currentTask?.status === 'loading'
+      && state.streamBuffer.trim() === '';
     const canArchive = Boolean(
       shouldArchive
       && state.currentTask
-      && state.streamBuffer.trim(),
+      && !isEmptyInFlight,
     );
     const history = canArchive
       ? [
