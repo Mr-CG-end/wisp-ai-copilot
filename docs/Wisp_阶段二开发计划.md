@@ -39,9 +39,16 @@
 | 审查报告后续修复 | 已完成 | 8 个提交 (25d8fb8～aa82727)：摘要选段排除无语义短行与预留开头预算、摘要提示词先给主旨句并匹配正文语言、正文抽取保留块级边界、接入正文抽取质量评测（需外部语料，未安装时整组跳过）、申请常驻主机权限并修正模型体积显示 |
 | 测试基线 | — | 31 文件 176 项通过 1 项跳过（跳过的是需外部 clone 语料的抽取评测 bench），`tsc --noEmit` 与 `build:dev` 均通过 |
 | M3 第一波 (W1) | 已完成 | 四个纯逻辑包并行落地，5 个提交 (a23ef5b～6638fe5)：① UISpec 升 v3.1 补 §5.11 设置页与 §5.12 错误分层矩阵；② `BackgroundToContent` 消息契约 + `PendingActionEntry.lang` 透传 + `core/panel/errorCopy.ts` 十四码文案分层表；③ `core/storage/settings.ts`（三字段，无 `outputLength`）+ `usage.ts` + `countModelCacheEntries`；④ `core/extract/selection.ts`/`sensitive.ts` + `core/panel/selectionBudget.ts`/`toolbarPosition.ts`；⑤ store 归档判据修正。测试 38 文件 280 项通过 1 跳过，`tsc --noEmit` 退出码 0 |
-| Task 10～14 | 部分执行 | 已按 M3/M4 方案重划分为 9 个工作包，W1 完成，W2（设置页 UI / Shadow DOM 工具条 / 划词交付握手）起需真机核对。本文三处失效内容见下方 §0.1.1 |
+| M3 第二波 (W2) | 代码已落地，**待真机核对** | 三个包并行，3 个提交 (700d69f～983fcbd)：① F-03 划词交付握手——`sidePanel.open()` 重排到手势同步段、`PANEL_READY` 握手与两路投递按 id 去重、`adoptCtx` 统一绑定提交、TaskPanel 拆三段使无快照时也能渲染轨迹；② Shadow DOM 工具条——`createShadowRootUi` + 内联 CSS 字符串（零 WAR）、`position:fixed` 视口坐标、选区监听移出 `onConnect`；③ 设置页——视图优先切换、后端首选项与重新加载、行内两步确认的清除数据、隐私说明八条。测试 39 文件 300 项通过 1 跳过，`tsc --noEmit` 与 `npm run build` 均通过。**约 45 项真机核对未执行**，见 §0.1.2 |
+| Task 10～14 | 部分执行 | 已按 M3/M4 方案重划分为 9 个工作包，W1/W2 代码完成，W3（错误分层收口与可访问性）、W4（回归集与阶段门）待启动。本文三处失效内容见下方 §0.1.1 |
 
 > 执行时每完成一个任务，在此表补一行状态与证据（沿用阶段一文档的进度同步方式）；Task 14 完成后在本节写入阶段门结论。
+
+### 0.1.2 W2 的真机核对
+
+W2 的三个包共欠 46 项真机核对，已整理成 `docs/Wisp_M3_真机核对清单.md`（按划词交付 / 工具条 / 设置页 / 待复现缺陷 / 待补资产 五组，标 ★ 的会影响阶段门判定）。其中 A1 的结果直接决定设计文档 §10 仅存三处未决之一（`sidePanel.open()` 能否跨 CS→SW 继承手势）——`sidePanel.open()` 已重排到手势同步段，因此这次测得的是真实结论，不再是 `await hydrated` 造成的假象。
+
+**演示视频不录制**，阶段门原文的「六步 Demo 可无剪辑连续录制」改为开发者手动连跑 10 轮走查，README 如实记录未录制。
 
 ### 0.1.1 Task 10～14 的三处失效内容（执行前必读）
 
