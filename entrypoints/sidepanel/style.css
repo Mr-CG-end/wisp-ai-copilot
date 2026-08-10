@@ -463,6 +463,35 @@ button {
   background: var(--wisp-accent-soft);
 }
 
+/* 翻译目标语言下拉：工具行里唯一的非按钮控件，与 .wisp-btn-sm 等高同字号。
+   原生 select 的厚边框与系统蓝会盖过旁边的「复制 / 重新生成」，全部压掉；
+   appearance:none 后不补自绘箭头 —— 两个选项的下拉，箭头带来的信息量不值那 12px。 */
+.wisp-turn-lang {
+  appearance: none;
+  min-height: 28px;
+  max-width: 96px;
+  padding: 3px 8px;
+  color: var(--wisp-text-muted);
+  background: var(--wisp-surface);
+  border: 1px solid var(--wisp-border);
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+  transition: border-color 140ms ease;
+}
+
+.wisp-turn-lang:hover:not(:disabled) {
+  border-color: var(--wisp-accent);
+}
+
+.wisp-turn-lang:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .wisp-btn-danger {
   color: var(--wisp-danger);
 }
@@ -521,6 +550,7 @@ button {
 .wisp-btn-link:focus-visible,
 .wisp-btn-nav:focus-visible,
 .wisp-select:focus-visible,
+.wisp-turn-lang:focus-visible,
 .wisp-qa-input:focus-visible {
   outline: 2px solid var(--wisp-focus);
   outline-offset: 2px;
@@ -742,6 +772,25 @@ button {
   flex-direction: column;
 }
 
+/* 无快照但有划词轮次时，占的是本该属于快照凭证行的位置，所以高度向它看齐（34px 内容 + 8px 上下内边距）。
+   刻意不加底色、不做卡片：这是「这一轮没有页面凭证」的如实交代，不是一条需要用户注意的提示。 */
+.wisp-selection-only {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--wisp-border);
+}
+
+.wisp-selection-only > span:first-child {
+  min-width: 0;
+  color: var(--wisp-text-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
 .wisp-page-empty strong {
   font-size: 14px;
 }
@@ -953,6 +1002,36 @@ button {
 }
 
 .wisp-turn-question p {
+  margin: 0;
+  font-size: 14px;
+}
+
+/* 划词来源回显。与「你的问题」同构，但**不共用** --wisp-accent-soft —— 那是追问的
+   身份色，两者同色会让人以为划词的原文也是自己敲进去的。改用引文语汇：竖线 + 静底。 */
+.wisp-turn-selection {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--wisp-border);
+  border-radius: 0 7px 7px 0;
+  background: var(--wisp-surface-muted);
+  color: var(--wisp-text);
+}
+
+.wisp-turn-selection span {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--wisp-text-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+/* 3 行截断是必须的，不是修饰：选区上限 4000 字，不截会把结果整个顶出视口，
+   而用户需要的只是「这一轮是基于哪段话」的确认，不是重读一遍原文。 */
+.wisp-turn-selection p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
   margin: 0;
   font-size: 14px;
 }
