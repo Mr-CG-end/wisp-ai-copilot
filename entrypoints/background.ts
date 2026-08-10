@@ -1,5 +1,6 @@
 import { EPOCH_STORAGE_KEY, EpochRegistry } from '../core/messaging/epoch';
 import { classifyPageInjectionError } from '../core/messaging/injectionError';
+import { isSamePageTarget } from '../core/messaging/navigation';
 import { PendingActionStore } from '../core/messaging/pending';
 import { purgeByTab, purgeExpired } from '../core/storage/cleanup';
 import { db, DEFAULT_RETENTION_DAYS } from '../core/storage/db';
@@ -146,7 +147,24 @@ export default defineBackground(() => {
         case 'TOOLBAR_ACTION': {
           const tabId = sender.tab?.id;
           if (tabId === undefined) return false;
+          // sidePanel.open() 必须在任何 await 之前同步发出。
+          // Chrome 只在「用户手势事件的同步调用栈」内认这次调用；一旦先 await
+          // （这里原本是 await hydrated），手势凭证就过期，open() 报
+          // "must be called in response to a user gesture"，面板永远打不开。
+          // 与下面的 pending 簿记没有因果依赖：面板挂载后会用 PANEL_READY 主动拉取，
+          // 簿记晚几毫秒到达没有影响。
+          chrome.sidePanel
+            .open({ tabId })
+            .catch(() => {
+              chrome.tabs.sendMessage(tabId, { type: 'OPEN_PANEL_HINT' }).catch(() => undefined);
+            });
+          // sender.tab.url 在常驻主机权限下可读，取值也必须在同步段完成。
+          const senderUrl = sender.tab?.url;
           void hydrated.then(() => {
+            // epoch 时序的廉价双保险：CS 报的选区 URL 与 SW 眼里这个标签页的
+            // 当前 URL 不是同一页，说明选区与点击之间发生了导航，此时 epochs.get()
+            // 会填上新页面的 epoch，任务看起来「当前有效」实则用的是旧选区。丢弃即可。
+            if (senderUrl && !isSamePageTarget(msg.url, senderUrl)) return;
             const entry = {
               id: crypto.randomUUID(),
               action: msg.action,
@@ -156,11 +174,6 @@ export default defineBackground(() => {
             };
             pending.put(entry, Date.now());
             broadcast({ type: 'PENDING_ACTION', ...entry });
-            chrome.sidePanel
-              .open({ tabId })
-              .catch(() => {
-                chrome.tabs.sendMessage(tabId, { type: 'OPEN_PANEL_HINT' }).catch(() => undefined);
-              });
           });
           return false;
         }

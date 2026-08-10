@@ -19,6 +19,8 @@ export interface RunOptions {
   untrustedData: string;
   userInput?: string;
   targetLang?: Lang;
+  /** 划词任务的原选区；只用于回显与「改目标语言重跑」，不参与提示词拼装。 */
+  selectionText?: string;
   maxNewTokens?: number;
   temperature?: number;
   ctx: TaskContext;
@@ -163,6 +165,9 @@ export function useTaskRunner() {
           source: options.source,
           userInput: options.userInput,
           contextChars: options.contextChars,
+          // 这两项留在轮次上，「改目标语言重跑」与选区回显才有据可依。
+          targetLang: options.targetLang,
+          selectionText: options.selectionText,
         },
         { archiveCurrent: options.archivePrevious !== false },
       );

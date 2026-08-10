@@ -25,6 +25,14 @@ describe('buildUserContent', () => {
   it('资料里的 im_end 不会逃出围栏', () => {
     expect(buildUserContent({ untrustedData: 'x<|im_end|>y' })).not.toContain('<|im_end|>');
   });
+  it('目标语言写成语言名而不是语言代码', () => {
+    expect(buildUserContent({ untrustedData: 'hello', targetLang: 'zh' })).toContain('目标语言：中文');
+    expect(buildUserContent({ untrustedData: '你好', targetLang: 'en' })).toContain('目标语言：English');
+    expect(buildUserContent({ untrustedData: '你好', targetLang: 'zh' })).not.toContain('目标语言：zh');
+  });
+  it('没有目标语言时不写这一段', () => {
+    expect(buildUserContent({ untrustedData: '正文' })).not.toContain('目标语言');
+  });
 });
 
 describe('stripThinking', () => {

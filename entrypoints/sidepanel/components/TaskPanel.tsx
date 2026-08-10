@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { defaultTargetLang } from '../../../core/extract/selection';
 import { selectSummaryContext } from '../../../core/extract/summaryContext';
 import { truncateForContext } from '../../../core/extract/truncate';
 import { isCtxCurrent } from '../../../core/panel/taskGuard';
@@ -7,11 +8,12 @@ import {
   selectProfileAfterSample,
   type PerformanceConfig,
 } from '../../../core/panel/performance';
+import { selectionBudget } from '../../../core/panel/selectionBudget';
 import { selectTurns } from '../../../core/panel/thread';
 import { appendMessage } from '../../../core/storage/cleanup';
 import { DAY_MS, db, DEFAULT_RETENTION_DAYS } from '../../../core/storage/db';
-import type { TaskContext, Uuid } from '../../../core/messaging/types';
-import type { TaskType } from '../store';
+import type { Lang, SelectionAction, TaskContext, Uuid } from '../../../core/messaging/types';
+import type { CurrentTask, TaskType } from '../store';
 import { usePanelStore } from '../store';
 import type { usePageChannel } from '../usePageChannel';
 import { useTaskRunner, type GenerationRunResult } from '../useTaskRunner';
@@ -28,6 +30,15 @@ function getPageHost(url: string): string {
   } catch {
     return '当前页面';
   }
+}
+
+/**
+ * 划词轮次的来源标识。
+ * ensureSession 需要一个 title，而划词场景压根没读过整页、拿不到页面标题，
+ * 于是用「域名 · 选区前 20 字」——两段合起来足以在历史里认出这是哪一次划词。
+ */
+function selectionLabel(url: string, text: string): string {
+  return `${getPageHost(url)} · ${text.replace(/\s+/g, ' ').trim().slice(0, 20)}`;
 }
 
 async function ensureSession(
@@ -87,11 +98,15 @@ function prepareGenerationContext(
 export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
   const {
     activeTab,
+    adoptCtx,
     boundCtx,
+    consumePendingAction,
     lastError: pageError,
+    pendingAction,
     readActivePage,
     readPage,
   } = pageChannel;
+  const modelStatus = usePanelStore((s) => s.modelStatus);
   const page = usePanelStore((s) => s.page);
   const currentTask = usePanelStore((s) => s.currentTask);
   const streamBuffer = usePanelStore((s) => s.streamBuffer);
@@ -122,6 +137,22 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
   // 快照过期 = 绑定页已导航或刷新（epoch 已变）；
   // 跨标签只是当前不在那个标签，快照仍然有效，由既有横幅表达，不动凭证。
   const isSnapshotStale = Boolean(page && boundCtx && page.ctx.epoch !== boundCtx.epoch);
+
+  /**
+   * 「当前轮还能不能重跑」。
+   * 划词轮次没有页面快照可比，判据换成「绑定是否仍指向它来自的那一页」；
+   * 快照轮次沿用原判据（同一份快照的 URL）。
+   */
+  const canRerunCurrent = !currentTask
+    ? false
+    : currentTask.selectionText
+      ? isCtxCurrent(currentTask.ctx, boundCtx)
+      : page !== null && currentTask.ctx.url === page.ctx.url;
+
+  // Turn 投影（core/panel/thread.ts）不带划词字段，按 id 回查 store 里的原始轮次。
+  const taskById = new Map<string, CurrentTask>();
+  for (const entry of history) taskById.set(entry.id, entry);
+  if (currentTask) taskById.set(currentTask.id, currentTask);
 
   // 自动切换不弹提示，只更新顶栏文本。
   const calibratePerformance = (result: GenerationRunResult | null) => {
@@ -220,8 +251,104 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
     window.setTimeout(() => setCopyNotice(null), 1600);
   };
 
+  /**
+   * 划词任务的统一执行路径：首次投递、重新生成、改目标语言重跑都走这里。
+   *
+   * 预算用 selectionBudget 而不是 prepareGenerationContext 的 qa 分支：后者只截上下文，
+   * 不会按选区规模放大输出上限，翻译和改写会被 qaMaxNewTokens 截在半句话上。
+   */
+  const runSelectionTask = async (input: {
+    action: SelectionAction;
+    text: string;
+    ctx: TaskContext;
+    targetLang?: Lang;
+    archivePrevious?: boolean;
+  }) => {
+    const budget = selectionBudget(input.action, input.text, performanceConfig);
+    const source = selectionLabel(input.ctx.url, input.text);
+    const result = await runGeneration({
+      taskType: input.action,
+      untrustedData: budget.text,
+      targetLang: input.targetLang,
+      selectionText: input.text,
+      maxNewTokens: budget.maxNewTokens,
+      contextChars: budget.contextChars,
+      streamFlushIntervalMs: performanceConfig.streamFlushIntervalMs,
+      ctx: input.ctx,
+      source,
+      archivePrevious: input.archivePrevious,
+    });
+    calibratePerformance(result);
+    if (result?.status === 'success') {
+      // 落库沿用整页那条路径：会话按 tabId + url 复用，隐身窗口整体跳过。
+      await persistGeneration({ title: source }, input.ctx, input.action, input.text, result.content)
+        .catch((error) => console.error('[wisp] persist selection', error));
+    }
+  };
+
+  /**
+   * 划词动作的唯一执行入口。
+   *
+   * 放 effect 不放 render：render 阶段启动生成既违反 React 的纯度约定，也会在
+   * StrictMode 下双跑。幂等由 consumePendingAction() 的「取走即清」兜底 ——
+   * 它读的是 ref，StrictMode 第二次执行 effect 时直接拿到 null。
+   *
+   * 模型没就绪时不取走，动作留在 hook 里等待；App 在 modelStatus 转 ready 后
+   * 才挂载本组件，届时本 effect 首次运行就会把它执行掉，动作不会丢。
+   *
+   * 抢占在途摘要不弹确认框（UISpec §5.12 口径一）：确认框会顶掉「点击到状态
+   * ≤500ms」的指标，而被抢占的那一轮会以「已停止」留在轨迹上，内容不丢。
+   *
+   * 依赖里刻意不放 runSelectionTask / adoptCtx：前者每次 render 都是新引用，
+   * effect 读到的已经是本次 render 的最新闭包，放进去只会让 effect 空转。
+   */
+  useEffect(() => {
+    if (!pendingAction || modelStatus !== 'ready') return;
+    const entry = consumePendingAction();
+    if (!entry) return;
+    // 走 hook 的 adoptCtx 而不是 store.setBoundCtx：后者只写 store，hook 内部的
+    // boundCtxRef 会停在 null，EPOCH_INVALIDATED 的守卫从此永远提前返回，
+    // 这个标签页刷新后划词任务的绑定再也不会被作废。
+    //
+    // 划词不建立 Port：选区文本已随消息送达，面板不需要再向该页面要任何东西，
+    // 为它注入 CS / 连 Port 是多余的权限动作。代价是 PAGE_UNLOADING /
+    // PAGE_NAVIGATED 这条 Port 通知对划词任务不可用，作废只能靠 SW 的
+    // EPOCH_INVALIDATED —— tabs.onUpdated 与 CS 的 PAGE_NAVIGATED→SW 两条通道
+    // 已覆盖刷新 / 跳转 / 关闭，够用。
+    adoptCtx(entry.ctx);
+    void runSelectionTask({
+      action: entry.action,
+      text: entry.text,
+      ctx: entry.ctx,
+      targetLang: entry.action === 'translate' ? defaultTargetLang(entry.lang) : undefined,
+    });
+  }, [pendingAction, modelStatus]);
+
+  /** 改目标语言即重跑本轮，与「重新生成」同语义：替换当前轮，不在轨迹上新增一节。 */
+  const handleChangeTargetLang = async (lang: 'zh' | 'en') => {
+    if (!currentTask?.selectionText || !canRerunCurrent) return;
+    await runSelectionTask({
+      action: currentTask.type as SelectionAction,
+      text: currentTask.selectionText,
+      ctx: currentTask.ctx,
+      targetLang: lang,
+      archivePrevious: false,
+    });
+  };
+
   const handleRegenerate = async () => {
-    if (!currentTask || !page || isHistoricalResult) return;
+    if (!currentTask || !canRerunCurrent) return;
+    if (currentTask.selectionText) {
+      await runSelectionTask({
+        action: currentTask.type as SelectionAction,
+        text: currentTask.selectionText,
+        ctx: currentTask.ctx,
+        targetLang: currentTask.targetLang,
+        archivePrevious: false,
+      });
+      return;
+    }
+    if (!page || isHistoricalResult) return;
     const context = prepareGenerationContext(currentTask.type, page.text, performanceConfig);
     const result = await runGeneration({
       taskType: currentTask.type,
@@ -274,6 +401,21 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
         </div>
       ) : null}
 
+      {pendingAction && modelStatus !== 'ready' ? (
+        // 不挂 role：§5.12 口径二要求全面板只有一个 live region，下方状态行已承担播报。
+        <div className="wisp-status-banner">模型尚未就绪，完成初始化后将继续该操作。</div>
+      ) : null}
+
+      {/*
+        唯一的 live region：只播报状态短语，不挂在正文容器上。
+        流式正文若挂 live region，每次 flush 都会触发一次读屏播报。
+        它与页面快照无关，因此在三段布局之外常驻——划词结果也要能被播报。
+      */}
+      <div className="wisp-sr-live" role="status" aria-live="polite">
+        {copyNotice ?? (isGenerating ? '正在生成' : currentTask?.status === 'success' ? '生成完成' : '')}
+      </div>
+
+      {/* —— (a) 快照区：有页面快照才存在 —— */}
       {page ? (
         <>
           {/* 常驻凭证行：必须是 .wisp-task-panel 的直接子元素，sticky 的包含块才是整个面板 */}
@@ -306,14 +448,6 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
             </div>
           </div>
 
-          {/*
-            唯一的 live region：只播报状态短语，不挂在正文容器上。
-            流式正文若挂 live region，每次 flush 都会触发一次读屏播报。
-          */}
-          <div className="wisp-sr-live" role="status" aria-live="polite">
-            {copyNotice ?? (isGenerating ? '正在生成' : currentTask?.status === 'success' ? '生成完成' : '')}
-          </div>
-
           <div className="wisp-action-bar" aria-label="页面操作">
             <button
               className={`wisp-btn ${turns.length === 0 ? 'wisp-btn-primary' : 'wisp-btn-secondary'}`}
@@ -324,60 +458,52 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
             </button>
             {copyNotice ? <span className="wisp-notice-pop" aria-hidden="true">{copyNotice}</span> : null}
           </div>
-
-          {turns.length === 0 ? (
-            <div className="wisp-state-empty">
-              <strong>生成结果会显示在这里</strong>
-              <span>可以先生成摘要，或在下方基于快照提问。</span>
-            </div>
-          ) : (
-            <div className="wisp-turns">
-              {turns.map((turn) => (
-                <TurnView
-                  key={turn.id}
-                  turn={turn}
-                  isStale={turn.sourceUrl !== page.ctx.url}
-                  isStopping={isStopping}
-                  canRegenerate={turn.isCurrent && turn.sourceUrl === page.ctx.url}
-                  onCopy={() => void handleCopyOutput(turn.output)}
-                  onRegenerate={() => void handleRegenerate()}
-                  onStop={() => void stop()}
-                />
-              ))}
-            </div>
-          )}
-
-          <div className="wisp-qa-area">
-            <label htmlFor="wisp-qa-input">继续追问</label>
-            <div className="wisp-qa-control">
-              <input
-                id="wisp-qa-input"
-                type="text"
-                className="wisp-qa-input"
-                placeholder="基于这份快照提问…"
-                value={qaInput}
-                disabled={isGenerating}
-                onChange={(event) => setQaInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    void handleSendQa();
-                  }
-                }}
-              />
-              <button
-                className="wisp-btn-send"
-                aria-label="发送问题"
-                disabled={!qaInput.trim() || isGenerating}
-                onClick={() => void handleSendQa()}
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M4 5.5 20 12 4 18.5l2.4-5.2L14 12l-7.6-1.3L4 5.5Z" />
-                </svg>
-              </button>
-            </div>
-          </div>
         </>
+      ) : null}
+
+      {/* 没有快照却已有轮次：这一轮只能来自划词，说清处理范围并给出补读整页的入口 */}
+      {!page && turns.length > 0 ? (
+        <div className="wisp-selection-only">
+          <span>本轮来自划词选区，未读取整页。</span>
+          {copyNotice ? <span className="wisp-notice-pop" aria-hidden="true">{copyNotice}</span> : null}
+          <button className="wisp-btn wisp-btn-secondary" onClick={() => void handleReadActivePage()}>
+            读取当前页
+          </button>
+        </div>
+      ) : null}
+
+      {/* —— (b) 轨迹区：有轮次就渲染，与快照是否存在无关 —— */}
+      {turns.length > 0 ? (
+        <div className="wisp-turns">
+          {turns.map((turn) => {
+            const task = taskById.get(turn.id);
+            return (
+              <TurnView
+                key={turn.id}
+                turn={turn}
+                // page 为 null 时「与当前快照不同」这句话不成立，一律不显示来源行
+                isStale={page !== null && turn.sourceUrl !== page.ctx.url}
+                isStopping={isStopping}
+                canRegenerate={turn.isCurrent && canRerunCurrent}
+                selectionText={task?.selectionText}
+                targetLang={task?.targetLang === 'en' ? 'en' : 'zh'}
+                onTargetLangChange={
+                  turn.isCurrent && turn.type === 'translate' && task?.selectionText
+                    ? (lang) => void handleChangeTargetLang(lang)
+                    : undefined
+                }
+                onCopy={() => void handleCopyOutput(turn.output)}
+                onRegenerate={() => void handleRegenerate()}
+                onStop={() => void stop()}
+              />
+            );
+          })}
+        </div>
+      ) : page ? (
+        <div className="wisp-state-empty">
+          <strong>生成结果会显示在这里</strong>
+          <span>可以先生成摘要，或在下方基于快照提问。</span>
+        </div>
       ) : (
         <div className="wisp-page-empty">
           <div>
@@ -389,6 +515,40 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
           </button>
         </div>
       )}
+
+      {/* —— (c) 提问区：追问基于快照，没有快照就没有可问的对象 —— */}
+      {page ? (
+        <div className="wisp-qa-area">
+          <label htmlFor="wisp-qa-input">继续追问</label>
+          <div className="wisp-qa-control">
+            <input
+              id="wisp-qa-input"
+              type="text"
+              className="wisp-qa-input"
+              placeholder="基于这份快照提问…"
+              value={qaInput}
+              disabled={isGenerating}
+              onChange={(event) => setQaInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  void handleSendQa();
+                }
+              }}
+            />
+            <button
+              className="wisp-btn-send"
+              aria-label="发送问题"
+              disabled={!qaInput.trim() || isGenerating}
+              onClick={() => void handleSendQa()}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 5.5 20 12 4 18.5l2.4-5.2L14 12l-7.6-1.3L4 5.5Z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

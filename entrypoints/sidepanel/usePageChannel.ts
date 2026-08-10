@@ -6,8 +6,11 @@ import type {
   ContentToPanel,
   EnsureContentScriptResult,
   ErrorCode,
+  PanelReadyResult,
   PanelToContent,
+  PendingActionEntry,
   TaskContext,
+  Uuid,
 } from '../../core/messaging/types';
 import { PORT_NAME } from '../../core/messaging/types';
 import { usePanelStore } from './store';
@@ -22,8 +25,20 @@ export function usePageChannel() {
   const requestSlotRef = useRef(new RequestSlot<ContentToPanel>());
   /** boundCtx 的同步镜像：同一个事件循环内 bind→read 时 React state 还没提交。 */
   const boundCtxRef = useRef<TaskContext | null>(null);
+  /**
+   * 已投递过的划词动作 id。
+   *
+   * 划词有两条投递路径：面板已开时走 PENDING_ACTION 广播，面板冷启动时走
+   * PANEL_READY 的响应体。两条路径在本 hook 汇合，去重就必须放在这个最近共同点——
+   * 放进 store 会把「一次性投递」变成持久状态；而面板重新挂载时这个集合该清空，
+   * 恰恰是 useRef 的默认行为（新面板本来就该重新接收 SW 里仍在有效期内的动作）。
+   */
+  const seenActionIdsRef = useRef<Set<Uuid>>(new Set());
+  /** pendingAction 的同步镜像：consume 必须在同一次提交里就生效，见 consumePendingAction。 */
+  const pendingActionRef = useRef<PendingActionEntry | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTabInfo | null>(null);
   const [boundCtx, setBoundCtxState] = useState<TaskContext | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingActionEntry | null>(null);
   const [lastError, setLastError] = useState<PageChannelError | null>(null);
 
   const commitBoundCtx = useCallback((ctx: TaskContext | null) => {
@@ -40,6 +55,41 @@ export function usePageChannel() {
     }
   }, []);
 
+  /**
+   * 让面板绑定到一个不是自己 bind 出来的上下文（当前只有划词动作会用）。
+   *
+   * 必须走 commitBoundCtx，绝不能直接 store.setBoundCtx(ctx)：store 与本 hook
+   * 各持一份 boundCtx，只有 commitBoundCtx 同写两份。绕过 hook 会让 boundCtxRef
+   * 停在 null，于是 onMessage 里 EPOCH_INVALIDATED 的守卫
+   * `if (!bound || bound.tabId !== msg.tabId) return` 永远提前返回 ——
+   * 那个标签页刷新之后，划词任务的绑定再也不会被作废。
+   */
+  const adoptCtx = useCallback((ctx: TaskContext) => {
+    commitBoundCtx(ctx);
+  }, [commitBoundCtx]);
+
+  const offerPendingAction = useCallback((entry: PendingActionEntry) => {
+    if (seenActionIdsRef.current.has(entry.id)) return;
+    seenActionIdsRef.current.add(entry.id);
+    pendingActionRef.current = entry;
+    setPendingAction(entry);
+  }, []);
+
+  /**
+   * 取走待执行的划词动作，取走即清。
+   *
+   * 读的是 ref 而不是 state：执行发生在消费方的 effect 里，React 18 StrictMode 下
+   * 挂载 effect 会跑两次，两次落在同一次提交内、state 还没刷新。ref 能让第二次
+   * 直接拿到 null，从而保证「一个动作只启动一次生成」。
+   */
+  const consumePendingAction = useCallback((): PendingActionEntry | null => {
+    const entry = pendingActionRef.current;
+    if (!entry) return null;
+    pendingActionRef.current = null;
+    setPendingAction(null);
+    return entry;
+  }, []);
+
   const closePort = useCallback(() => {
     const port = portRef.current;
     portRef.current = null;
@@ -51,6 +101,10 @@ export function usePageChannel() {
   useEffect(() => {
     const onMessage = (msg: BackgroundToPanel) => {
       if (msg.type === 'ACTIVE_TAB') setActiveTab({ tabId: msg.tabId, epoch: msg.epoch });
+      if (msg.type === 'PENDING_ACTION') {
+        const { type: _type, ...entry } = msg;
+        offerPendingAction(entry);
+      }
       if (msg.type === 'EPOCH_INVALIDATED') {
         const bound = boundCtxRef.current;
         if (!bound || bound.tabId !== msg.tabId) return;
@@ -59,15 +113,23 @@ export function usePageChannel() {
         setLastError({ code: 'TAB_CHANGED', message: '页面已导航或关闭，旧任务已作废' });
       }
     };
+    // 监听必须先于握手注册：SW 可能在响应 PANEL_READY 之前就广播了新的划词动作，
+    // 顺序反过来那一条就永远收不到（两条路径都带 id，重复投递由 offerPendingAction 兜住）。
     chrome.runtime.onMessage.addListener(onMessage);
-    void chrome.runtime.sendMessage({ type: 'REQUEST_ACTIVE_TAB' }).then((info: ActiveTabInfo | null) => {
-      if (info) setActiveTab(info);
-    });
+    // PANEL_READY 同时回活动标签与暂存的划词动作，取代原先单独的 REQUEST_ACTIVE_TAB。
+    void chrome.runtime
+      .sendMessage({ type: 'PANEL_READY' })
+      .then((result: PanelReadyResult | undefined) => {
+        if (!result) return;
+        if (result.active) setActiveTab(result.active);
+        if (result.pending) offerPendingAction(result.pending);
+      })
+      .catch(() => undefined);
     return () => {
       chrome.runtime.onMessage.removeListener(onMessage);
       closePort();
     };
-  }, [closePort, commitBoundCtx]);
+  }, [closePort, commitBoundCtx, offerPendingAction]);
 
   /**
    * 用户显式「在本页启用 Wisp」：注入 CS 并建立 Port。
@@ -270,5 +332,17 @@ export function usePageChannel() {
     [request],
   );
 
-  return { activeTab, boundCtx, bindActiveTab, readPage, readActivePage, requestSelection, lastError, setLastError };
+  return {
+    activeTab,
+    boundCtx,
+    adoptCtx,
+    pendingAction,
+    consumePendingAction,
+    bindActiveTab,
+    readPage,
+    readActivePage,
+    requestSelection,
+    lastError,
+    setLastError,
+  };
 }

@@ -30,6 +30,17 @@ export function sanitizeUntrusted(raw: string): string {
     .replaceAll(FENCE_CLOSE, `</${ZW}material>`);
 }
 
+/**
+ * 目标语言的人类可读标签。
+ * 直接拼 `目标语言：zh` 是把内部枚举漏进提示词——小模型对语言代码的理解远不如
+ * 语言名稳定，写 `zh` 有概率被当成无意义 token 忽略掉。
+ */
+const TARGET_LANG_LABEL: Record<Lang, string> = {
+  zh: '中文',
+  en: 'English',
+  other: '原文语言',
+};
+
 export function buildUserContent(req: {
   untrustedData: string;
   userInput?: string;
@@ -37,7 +48,7 @@ export function buildUserContent(req: {
 }): string {
   const material = `${FENCE_OPEN}\n${sanitizeUntrusted(req.untrustedData)}\n${FENCE_CLOSE}`;
   const ask = req.userInput ? `\n\n问题：${req.userInput}` : '';
-  const lang = req.targetLang ? `\n\n目标语言：${req.targetLang}` : '';
+  const lang = req.targetLang ? `\n\n目标语言：${TARGET_LANG_LABEL[req.targetLang]}` : '';
   return `${material}${ask}${lang}`;
 }
 

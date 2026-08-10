@@ -9,6 +9,11 @@ interface TurnViewProps {
   isStale: boolean;
   isStopping: boolean;
   canRegenerate: boolean;
+  /** 划词轮次的原选区；有值即在正文顶部回显，让用户确认这一轮处理的是哪段文字 */
+  selectionText?: string;
+  /** 翻译轮次的目标语言与切换回调；只有同时给出才渲染下拉 */
+  targetLang?: 'zh' | 'en';
+  onTargetLangChange?: (lang: 'zh' | 'en') => void;
   onCopy: () => void;
   onRegenerate: () => void;
   onStop: () => void;
@@ -27,7 +32,8 @@ function hostOf(url: string): string {
  * 历史不是「另一种东西」，只是轨道上更早的节点。
  */
 export const TurnView: React.FC<TurnViewProps> = ({
-  turn, isStale, isStopping, canRegenerate, onCopy, onRegenerate, onStop,
+  turn, isStale, isStopping, canRegenerate, selectionText, targetLang,
+  onTargetLangChange, onCopy, onRegenerate, onStop,
 }) => {
   const isGenerating = turn.status === 'loading';
   return (
@@ -49,6 +55,18 @@ export const TurnView: React.FC<TurnViewProps> = ({
             </button>
           ) : (
             <div className="wisp-turn-actions">
+              {onTargetLangChange ? (
+                <select
+                  className="wisp-turn-lang"
+                  aria-label="翻译目标语言"
+                  value={targetLang ?? 'zh'}
+                  disabled={!canRegenerate}
+                  onChange={(event) => onTargetLangChange(event.target.value as 'zh' | 'en')}
+                >
+                  <option value="zh">译为中文</option>
+                  <option value="en">译为英文</option>
+                </select>
+              ) : null}
               {turn.output ? (
                 <button className="wisp-btn-sm" onClick={onCopy}>复制</button>
               ) : null}
@@ -60,6 +78,13 @@ export const TurnView: React.FC<TurnViewProps> = ({
         </header>
 
         <div className="wisp-turn-body">
+          {selectionText ? (
+            <div className="wisp-turn-selection">
+              <span>选中的文字</span>
+              <p>{selectionText}</p>
+            </div>
+          ) : null}
+
           {turn.userInput ? (
             <div className="wisp-turn-question">
               <span>你的问题</span>
