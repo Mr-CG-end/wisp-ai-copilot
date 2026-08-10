@@ -5,6 +5,8 @@
 > 基线：分支 `feat/stage2-spike`，HEAD `ecbfe35`，已推送 `origin`，工作区干净。
 > 验证状态：`npm test` = 39 文件 300 项通过 1 跳过；`npx tsc --noEmit` = 0；`npm run build` 通过。
 > 跳过的那 1 项是 `core/bench/extractionCorpus.bench.ts`，需要外部 clone 语料（`git clone --depth 1 https://github.com/scrapinghub/article-extraction-benchmark bench-corpus`），未安装时整组跳过。**跳过不等于通过**，阶段门里要如实标注。
+>
+> ⚠️ **两条会误导冷启动判断的事，先看 §10 与 §11**：① 三份计划文档共 197 个复选框全部未勾选，但对应工作大多已完成，进度以 `Wisp_阶段二开发计划.md` §0.1 的表格为准；② 仓库无 CI、无 lint/format、无 hooks，所有约定都是散文而非可执行护栏。
 
 ---
 
@@ -184,3 +186,77 @@ if (!isCacheRestoreFailure(e) && manifest!.backend === 'webgpu') → needs-user-
 若必须拆，唯一安全的切法是：`core/inference/errorClassify.ts`（纯逻辑 + 单测）与 `StatusBanner.tsx`（纯组件 + 单测）先并行落地，UI 接线再串行做。
 
 并行时代理**不要执行 git commit** —— 多路写同一个 index 会互相踩，且审查关卡应落在提交之前。
+
+---
+
+## 10. TDD 的实际边界（不是全量 TDD）
+
+**结论：TDD 在跑，而且红→绿的纪律是真的被执行的，但它只覆盖 `core/**` 与部分 React 组件。**
+
+已验证的执行证据（本轮）：改 store 归档判据前 4 条新测试在旧代码上跑红；`core/extract` 四个模块首轮全是 `Failed to load url`；划词交付的两条回归测试是先把已写好的实现**故意打断**（删去重守卫、把 `adoptCtx` 换回直接写 store）确认会红，再还原。
+
+边界写在计划 §2 与 `AGENTS.md` 里：**纯逻辑先写失败测试再实现；浏览器行为任务写完代码后按验收清单在 Chrome 真机核对。** 这个划法是合理的（MV3 三上下文的真实行为 jsdom 复刻不了），但要知道代价。
+
+当前分布：39 个测试文件 = `core/` 32 + `entrypoints/` 7。**零测试的恰恰是最复杂的几个文件**：
+
+| 文件 | 规模 | 现状 |
+|---|---|---|
+| `entrypoints/background.ts` | ~180 行 | 无测试 |
+| `entrypoints/content.ts` | ~450 行 | 无测试 |
+| `entrypoints/sidepanel/components/ModelSetup.tsx` | ~490 行 | 无测试 |
+| `entrypoints/sidepanel/components/TaskPanel.tsx` | ~500 行 | 无测试 |
+| `entrypoints/sidepanel/useTaskRunner.ts` | ~260 行 | 无测试 |
+| `components/SelectionToolbar.tsx` | ~110 行 | 无测试，且 `vitest.config.ts` 的 include **不覆盖根级 `components/`**，放了测试也不会被执行 |
+
+这几个的正确性完全押在 `docs/Wisp_M3_真机核对清单.md` 的 51 项人工核对上，回归靠人记得重跑。**接手时不要把「没有测试」误读成「不需要测试」，也不要为了补测试去给 chrome API 造一整套桩**——那套桩的维护成本会超过它挡住的 bug。要补就补 `components/` 的 include 缺口（一行）和 `SelectionToolbar` 的纯展示测试（它不碰 chrome API，可测）。
+
+---
+
+## 11. 工程化护栏：约定很强，机制几乎为零（待补，按优先级）
+
+`.github/`、`.husky/`、eslint、prettier **全部不存在**，仓库里只有 `vitest.config.ts` 与 `wxt.config.ts` 两个配置。`AGENTS.md` 自己也写明「当前未配置 formatter / linter 脚本」。
+
+也就是说：**所有护栏都是散文，不是可执行物**，遵守它们靠执行者读了文档并选择照做，仓库本身不阻止任何事。这不是抽象缺陷，已经咬人三次：
+
+- 14 个 `ErrorCode` 里 5 个从未被写入任何代码路径。`Record<ErrorCode, ...>` 的类型检查只保证**文案表**齐全，保证不了那些码真的会被触发
+- 14 处硬编码错误文案仍散在三个文件里，`ERROR_COPY` 至今只有 1 个消费者，没有任何机制发现这件事
+- 阶段门要求 manifest 权限恰四项、host 恰两条、无 `tabs`/`webNavigation`/`<all_urls>`，现在靠人眼在 `chrome://extensions` 上核对
+
+### ⚠️ 先记住这一条：197 个复选框全部未勾选，但工作是做完了的
+
+`docs/Wisp_阶段二开发计划.md`（107 个）、`docs/superpowers/plans/2026-07-27-wisp-thread-ui.md`（71 个）、`docs/Wisp_M2收口与设计文档回写计划.md`（19 个）合计 197 个 `- [ ]`，**已勾选 0 个**。实际进度记在 `Wisp_阶段二开发计划.md` §0.1 的散文表格里。
+
+**不要把未勾选读成未完成**——轨迹 UI 那份计划的 10 个 Task 全部落地了，复选框一个没动。这套复选框机制事实上是装饰。要么后续开始用，要么在文档头部加一句声明说明它不代表进度；两者选一，别留着继续误导。
+
+### 待补清单（小投入，每条都堵住上面已经发生过的问题）
+
+**① manifest 断言测试**（优先级最高，投入最小）
+
+新建 `tests/manifest.test.ts`，并在 `vitest.config.ts` 的 `include` 加一条 `'tests/**/*.test.ts'`。读 `.output/chrome-mv3/manifest.json` 断言：
+
+- `permissions` 恰为 `sidePanel` / `storage` / `activeTab` / `scripting` 四项
+- `host_permissions` 恰为 `http://*/*` 与 `https://*/*` 两项
+- 不含 `tabs`、`webNavigation`、`<all_urls>`
+- `content_security_policy.extension_pages` 的 `connect-src` 白名单恰为阶段一实测那 5 个模型下载主机，无新增出网主机
+
+**产物不存在时整组跳过**，照 `core/bench/extractionCorpus.bench.ts` 已有的跳过写法（`describe.skip` + 一段说明如何生成产物的提示），不要让没跑过 build 的人看到一片红。
+
+**② `ErrorCode` 触达覆盖检查**（随 W3 一起落地）
+
+一个扫源码的测试：对每个 `ErrorCode` 字面量，断言它在 `core/panel/errorCopy.ts` 与 `core/messaging/types.ts` **之外**至少出现一次。当前会红 5 条，这正是它的价值。
+
+落地方式：带一个显式的 `PENDING_CODES` 白名单，**W3 结束时必须只剩 `FILL_FAILED`**（v0.2 F-04 预留，附注释说明）。W3 每接通一个码就从白名单里删一个，测试自然收紧。
+
+**③ CI**
+
+`.github/workflows/ci.yml`，push 与 PR 触发，一个 job：
+
+```
+npm ci  →  npx tsc --noEmit  →  npm test  →  npm run build
+```
+
+Node 版本与本地一致。不要在 CI 里跑 bench（语料要外部 clone）。这一步之后，前两条断言才真正有强制力。
+
+**④ lint / format**（最后，且可选）
+
+现在加 eslint/prettier 会产生一个覆盖全仓的格式化 diff，把 git blame 冲掉。若要做：先单独一个「仅格式化」提交，配置对齐 `AGENTS.md` 已记录的风格（两空格、单引号、分号、多行尾逗号），不要顺手改 lint 规则去动代码逻辑。**这一条的收益远低于前三条，不急。**
