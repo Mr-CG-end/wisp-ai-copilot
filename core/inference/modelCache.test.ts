@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ModelCacheManifest } from './modelCache';
-import { checkCacheMatch } from './modelCache';
+import { checkCacheMatch, countModelCacheEntries } from './modelCache';
 
 const validManifest: ModelCacheManifest = {
   schema: 1,
@@ -54,5 +54,60 @@ describe('checkCacheMatch', () => {
       revision: validManifest.revision,
       dtype: 'q8',
     })).toBe(false);
+  });
+});
+
+const { modelId, revision } = validManifest;
+const hit = (file: string) => `https://huggingface.co/${modelId}/resolve/${revision}/${file}`;
+
+function stubCaches(store: Record<string, string[]>): void {
+  vi.stubGlobal('caches', {
+    keys: async () => Object.keys(store),
+    open: async (name: string) => ({
+      keys: async () => (store[name] ?? []).map((url) => ({ url })),
+    }),
+  });
+}
+
+describe('countModelCacheEntries', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('累计所有 cache 中命中当前 revision 的条目', async () => {
+    stubCaches({
+      'transformers-cache': [hit('onnx/model_q4f16.onnx'), hit('config.json')],
+      other: [hit('tokenizer.json')],
+    });
+    await expect(countModelCacheEntries(modelId, revision)).resolves.toBe(3);
+  });
+
+  it('其他模型或其他 revision 的条目不计入', async () => {
+    stubCaches({
+      'transformers-cache': [
+        hit('config.json'),
+        `https://huggingface.co/${modelId}/resolve/other-sha/config.json`,
+        'https://huggingface.co/other/model/resolve/abc/config.json',
+        'https://example.com/unrelated.js',
+      ],
+    });
+    await expect(countModelCacheEntries(modelId, revision)).resolves.toBe(1);
+  });
+
+  it('没有任何缓存时返回 0', async () => {
+    stubCaches({});
+    await expect(countModelCacheEntries(modelId, revision)).resolves.toBe(0);
+  });
+
+  it('caches 不可用时返回 0，与 hasModelCacheEntries 的处理一致', async () => {
+    vi.stubGlobal('caches', undefined);
+    await expect(countModelCacheEntries(modelId, revision)).resolves.toBe(0);
+  });
+
+  it('Cache API 抛错时返回 0 而不是 reject', async () => {
+    vi.stubGlobal('caches', {
+      keys: async () => { throw new Error('storage disabled'); },
+    });
+    await expect(countModelCacheEntries(modelId, revision)).resolves.toBe(0);
   });
 });

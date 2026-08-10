@@ -116,6 +116,27 @@ export async function hasModelCacheEntries(modelId: string, revision: string): P
   }
 }
 
+/**
+ * 辅助方法：统计 Cache API 中属于当前模型 revision 的响应条目数（设置页用量展示）。
+ * 与 `hasModelCacheEntries` 同一套 marker 匹配，只是不能命中即返回——必须走完所有 cache 累加。
+ */
+export async function countModelCacheEntries(modelId: string, revision: string): Promise<number> {
+  if (typeof caches === 'undefined') return 0;
+  try {
+    const keys = await caches.keys();
+    const marker = `/${modelId}/resolve/${revision}/`;
+    let count = 0;
+    for (const key of keys) {
+      const cache = await caches.open(key);
+      const requests = await cache.keys();
+      count += requests.filter((req) => req.url.includes(marker)).length;
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
 /** 辅助方法：删除匹配特定 modelId 与 revision 的 Cache API 条目 */
 export async function purgeModelCacheEntries(modelId: string, revision: string): Promise<void> {
   if (typeof caches === 'undefined') return;
