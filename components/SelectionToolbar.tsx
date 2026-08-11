@@ -23,8 +23,12 @@ const FEEDBACK_MS = 1500;
 const HINT_MS = 6000;
 
 interface SelectionToolbarProps {
-  /** 非空即切换为提示态，占工具条原位（面板无法程序化打开时的兜底）。 */
+  /** 非空即切换为提示态；落点由 Content Script 按提示用途决定。 */
   hint?: string;
+  /** 首次启用提示的第二行说明；普通兜底提示不传。 */
+  hintDetail?: string;
+  /** 首次启用提示为 4s；不传时保留原有面板兜底提示的 6s。 */
+  hintDurationMs?: number;
   onAction: (action: SelectionAction) => void;
   /** 反馈或提示播完后，请求宿主收起工具条。宿主须传稳定引用。 */
   onDismiss: () => void;
@@ -32,6 +36,8 @@ interface SelectionToolbarProps {
 
 export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({
   hint,
+  hintDetail,
+  hintDurationMs = HINT_MS,
   onAction,
   onDismiss,
 }) => {
@@ -40,9 +46,9 @@ export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({
 
   useEffect(() => {
     if (!hint) return undefined;
-    const timer = window.setTimeout(onDismiss, HINT_MS);
+    const timer = window.setTimeout(onDismiss, hintDurationMs);
     return () => window.clearTimeout(timer);
-  }, [hint, onDismiss]);
+  }, [hint, hintDurationMs, onDismiss]);
 
   useEffect(() => {
     if (!busy) return undefined;
@@ -58,8 +64,12 @@ export const SelectionToolbar: React.FC<SelectionToolbarProps> = ({
 
   if (hint) {
     return (
-      <div className="wisp-toolbar wisp-toolbar--message" role="status">
-        <span className="wisp-toolbar__status">{hint}</span>
+      <div
+        className={`wisp-toolbar wisp-toolbar--message${hintDetail ? ' wisp-toolbar--discovery' : ''}`}
+        role="status"
+      >
+        {hintDetail ? <strong className="wisp-toolbar__hint-title">{hint}</strong> : null}
+        <span className="wisp-toolbar__status">{hintDetail ?? hint}</span>
       </div>
     );
   }

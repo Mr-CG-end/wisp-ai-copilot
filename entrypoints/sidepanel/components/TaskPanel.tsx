@@ -19,6 +19,7 @@ import type { usePageChannel } from '../usePageChannel';
 import { useTaskRunner, type GenerationRunResult } from '../useTaskRunner';
 import { SnapshotStamp } from './SnapshotStamp';
 import { TurnView } from './Turn';
+import { SelectionDiscovery } from './SelectionDiscovery';
 
 interface TaskPanelProps {
   pageChannel: ReturnType<typeof usePageChannel>;
@@ -506,13 +507,16 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
         </div>
       ) : (
         <div className="wisp-page-empty">
-          <div>
-            <strong>读取一份页面快照</strong>
-            <span>只在你点击后提取正文，不会持续监视网页。</span>
+          <div className="wisp-page-empty-primary">
+            <div>
+              <strong>读取一份页面快照</strong>
+              <span>只在你点击后提取正文，不会持续监视网页。</span>
+            </div>
+            <button className="wisp-btn wisp-btn-primary" onClick={() => void handleReadActivePage()}>
+              读取当前页
+            </button>
           </div>
-          <button className="wisp-btn wisp-btn-primary" onClick={() => void handleReadActivePage()}>
-            读取当前页
-          </button>
+          <SelectionDiscovery />
         </div>
       )}
 

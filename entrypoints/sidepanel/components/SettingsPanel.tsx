@@ -23,6 +23,7 @@ import {
   type Settings,
 } from '../../../core/storage/settings';
 import { collectUsage, formatUsageLine, type UsageSnapshot } from '../../../core/storage/usage';
+import { SELECTION_DISCOVERY_COMPLETED_KEY } from '../../../core/storage/uiHints';
 
 interface SettingsPanelProps {
   /** 「重新加载模型」把面板切回任务视图，让 ModelSetup 重新挂载走缓存检查。 */
@@ -53,6 +54,7 @@ const PREFERRED_LABEL: Record<Settings['backend'], string> = {
 const CLEARABLE_STORAGE_KEYS: string[] = [
   ...Object.keys(DEFAULT_SETTINGS),
   MODEL_CACHE_MANIFEST_KEY,
+  SELECTION_DISCOVERY_COMPLETED_KEY,
 ];
 
 /**

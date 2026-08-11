@@ -24,6 +24,7 @@ const purgeSessions = vi.fn(async () => {});
 vi.mock('../../../core/storage/cleanup', () => ({ purgeSessions: (...args: unknown[]) => purgeSessions(...(args as [])) }));
 
 import { MODEL_CACHE_MANIFEST_KEY } from '../../../core/inference/modelCache';
+import { SELECTION_DISCOVERY_COMPLETED_KEY } from '../../../core/storage/uiHints';
 import { usePanelStore } from '../store';
 import { SettingsPanel } from './SettingsPanel';
 
@@ -111,7 +112,12 @@ describe('SettingsPanel', () => {
   });
 
   it('「清除全部数据」按键名精确删除，不调用 storage.local.clear', async () => {
-    stored = { backend: 'wasm', retentionDays: 0, modelId: 'onnx-community/Qwen3-0.6B-ONNX' };
+    stored = {
+      backend: 'wasm',
+      retentionDays: 0,
+      modelId: 'onnx-community/Qwen3-0.6B-ONNX',
+      [SELECTION_DISCOVERY_COMPLETED_KEY]: true,
+    };
     const c = await render(<SettingsPanel onBack={() => {}} />);
     await act(async () => { buttonByLabel(c, '清除全部数据').click(); });
     await act(async () => { buttonByText(c, '确认清除').click(); });
@@ -123,6 +129,7 @@ describe('SettingsPanel', () => {
     expect(keys).toContain('retentionDays');
     expect(keys).toContain('modelId');
     expect(keys).toContain(MODEL_CACHE_MANIFEST_KEY);
+    expect(keys).toContain(SELECTION_DISCOVERY_COMPLETED_KEY);
     expect(stored).toEqual({});
   });
 
@@ -138,6 +145,7 @@ describe('SettingsPanel', () => {
   });
 
   it('只清会话时保留模型运行态', async () => {
+    stored = { [SELECTION_DISCOVERY_COMPLETED_KEY]: true };
     usePanelStore.setState({ modelStatus: 'ready', modelBackend: 'wasm' });
     const c = await render(<SettingsPanel onBack={() => {}} />);
     await act(async () => { buttonByLabel(c, '清除会话记录').click(); });
@@ -147,6 +155,7 @@ describe('SettingsPanel', () => {
     expect(purgeSessions).toHaveBeenCalledOnce();
     expect(usePanelStore.getState().modelStatus).toBe('ready');
     expect(usePanelStore.getState().modelBackend).toBe('wasm');
+    expect(stored[SELECTION_DISCOVERY_COMPLETED_KEY]).toBe(true);
   });
 
   it('首选后端与当前运行不一致时才给「重新加载模型」', async () => {

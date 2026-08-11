@@ -61,11 +61,12 @@ export type BackgroundToPanel =
   | { type: 'EPOCH_INVALIDATED'; tabId: number; epoch: number };
 
 // —— runtime：Service Worker → Content Script —— //
-// 这两条此前都是裸对象字面量（background.ts 的 ensureContentScript 探活、
-// 以及 sidePanel.open() 失败后的手势退路提示），发什么类型编译器都不管。
+// PING 与 OPEN_PANEL_HINT 此前都是裸对象字面量；首次发现提示沿用同一条
+// SW → Content Script 通道，统一纳入联合类型，避免两端消息名静默漂移。
 export type BackgroundToContent =
   | { type: 'PING' }              // 探活，CS 回 { type: 'PONG' }
-  | { type: 'OPEN_PANEL_HINT' };  // 面板无法程序化打开时，请 CS 就地提示用户点图标
+  | { type: 'OPEN_PANEL_HINT' }   // 面板无法程序化打开时，请 CS 就地提示用户点图标
+  | { type: 'SHOW_SELECTION_DISCOVERY' }; // 首次使用前，提示当前页已启用划词
 
 // —— runtime 响应体（sendResponse 的形状，Panel 侧按此解构）—— //
 export interface ActiveTabInfo { tabId: number; epoch: number; }

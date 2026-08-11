@@ -9,6 +9,7 @@ import { detectLang, isSelectionUsable, normalizeSelection } from '../core/extra
 import { isSensitiveSelection } from '../core/extract/sensitive';
 import { shouldInvalidateNavigation } from '../core/messaging/navigation';
 import { clampToolbarPosition, type ToolbarPositionInput } from '../core/panel/toolbarPosition';
+import { markSelectionDiscoveryCompleted } from '../core/storage/uiHints';
 import {
   PORT_NAME,
   type BackgroundToContent,
@@ -30,6 +31,9 @@ const SELECTION_SETTLE_MS = 70;
  * 不写「点击 Wisp 图标」：v0.1 还没有图标资产，用户认不出哪个是它。
  */
 const OPEN_PANEL_HINT_TEXT = '点击浏览器工具栏上的扩展图标继续';
+const DISCOVERY_HINT_TITLE = 'Wisp 划词已启用';
+const DISCOVERY_HINT_DETAIL = '选中文字即可解释、总结、改写或翻译';
+const DISCOVERY_HINT_MS = 4000;
 
 export default defineContentScript({
   registration: 'runtime',
@@ -61,6 +65,8 @@ export default defineContentScript({
     let lastRect: ToolbarPositionInput['rect'] | null = null;
     let settleTimer = 0;
     let showSeq = 0;
+    /** action 点击与 Panel ENSURE 可能连续通知，同一页面生命周期只展示一次。 */
+    let discoveryHintShown = false;
 
     /**
      * Shadow Root 全页只建一次。
@@ -132,6 +138,29 @@ export default defineContentScript({
       container.style.visibility = 'visible';
     }
 
+    /** 首次启用提示没有选区锚点，固定在视口底部居中，且不参与宿主页面布局。 */
+    function placeAtViewportBottom(
+      ui: ShadowRootContentScriptUi<Root>,
+      node: ReactNode,
+    ): void {
+      const container = ui.uiContainer;
+      container.style.display = 'block';
+      container.style.visibility = 'hidden';
+      container.style.left = '0';
+      container.style.top = '0';
+      renderToolbar(ui, node);
+      const box = container.getBoundingClientRect();
+      const margin = 12;
+      const left = Math.max(margin, Math.min(
+        (window.innerWidth - box.width) / 2,
+        window.innerWidth - box.width - margin,
+      ));
+      const top = Math.max(margin, window.innerHeight - box.height - 24);
+      container.style.left = `${left}px`;
+      container.style.top = `${top}px`;
+      container.style.visibility = 'visible';
+    }
+
     /** 只收起 UI，不动 pending —— showToolbar() 依赖这一点。 */
     function teardownUi(): void {
       holding = false;
@@ -163,6 +192,8 @@ export default defineContentScript({
       // 否则紧随其后的 mouseup 会把 1.5s 的动效顶掉
       holding = true;
       if (!pending) return;
+      // 用户已经实际点击过一个有效动作，后续页面不再主动提示；写入失败不阻断任务。
+      void markSelectionDiscoveryCompleted().catch(() => undefined);
       const msg: ContentToBackground = {
         type: 'TOOLBAR_ACTION',
         action,
@@ -211,6 +242,33 @@ export default defineContentScript({
             createElement(SelectionToolbar, {
               key: `hint-${++showSeq}`,
               hint: OPEN_PANEL_HINT_TEXT,
+              onAction: sendAction,
+              onDismiss: hide,
+            }),
+          );
+        })
+        .catch(() => undefined);
+    }
+
+    /**
+     * 首次启用提示不设置 holding：用户在它显示期间划词，真实工具条会立即替换提示。
+     * seq 防止 Shadow Root 首次挂载的 await 晚于一次真实选区，从而把工具条盖回提示。
+     */
+    function showSelectionDiscovery(): void {
+      if (discoveryHintShown) return;
+      discoveryHintShown = true;
+      const seq = ++showSeq;
+      void ensureToolbarUi()
+        .then((ui) => {
+          if (seq !== showSeq || pending) return;
+          teardownUi();
+          placeAtViewportBottom(
+            ui,
+            createElement(SelectionToolbar, {
+              key: `discovery-${seq}`,
+              hint: DISCOVERY_HINT_TITLE,
+              hintDetail: DISCOVERY_HINT_DETAIL,
+              hintDurationMs: DISCOVERY_HINT_MS,
               onAction: sendAction,
               onDismiss: hide,
             }),
@@ -362,6 +420,9 @@ export default defineContentScript({
           return false;
         case 'OPEN_PANEL_HINT':
           showHint();
+          return false;
+        case 'SHOW_SELECTION_DISCOVERY':
+          showSelectionDiscovery();
           return false;
         default:
           return false;

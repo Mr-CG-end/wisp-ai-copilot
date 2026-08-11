@@ -4,6 +4,7 @@ import { isSamePageTarget } from '../core/messaging/navigation';
 import { PendingActionStore } from '../core/messaging/pending';
 import { purgeByTab, purgeExpired } from '../core/storage/cleanup';
 import { db, DEFAULT_RETENTION_DAYS } from '../core/storage/db';
+import { isSelectionDiscoveryCompleted } from '../core/storage/uiHints';
 import type {
   ActiveTabInfo,
   BackgroundToPanel,
@@ -47,12 +48,28 @@ export default defineBackground(() => {
     broadcast({ type: 'EPOCH_INVALIDATED', tabId, epoch });
   }
 
+  /**
+   * 页面提示只是可发现性增强，存储或消息失败都不能阻断注入与面板打开主链路。
+   * 同一 Content Script 会自行去重 action 点击与 Panel ENSURE 可能造成的双路通知。
+   */
+  async function maybeShowSelectionDiscovery(tabId: number): Promise<void> {
+    try {
+      if (await isSelectionDiscoveryCompleted()) return;
+      await chrome.tabs.sendMessage(tabId, { type: 'SHOW_SELECTION_DISCOVERY' });
+    } catch {
+      /* 提示失败不影响主功能 */
+    }
+  }
+
   chrome.action.onClicked.addListener((tab) => {
     if (tab.windowId === undefined) return;
     if (tab.id !== undefined) {
+      const tabId = tab.id;
       // action 点击会授予当前标签页 activeTab；趁授权仍有效时预先注入，
       // 避免 Side Panel 已打开后再点“读取当前页”丢失授权。
-      void ensureContentScript(tab.id);
+      void ensureContentScript(tabId).then((result) => {
+        if (result.ok) void maybeShowSelectionDiscovery(tabId);
+      });
     }
     chrome.sidePanel
       .open({ windowId: tab.windowId })
@@ -135,7 +152,10 @@ export default defineBackground(() => {
           return true;
         }
         case 'ENSURE_CONTENT_SCRIPT': {
-          void ensureContentScript(msg.tabId).then(sendResponse);
+          void ensureContentScript(msg.tabId).then((result) => {
+            if (result.ok) void maybeShowSelectionDiscovery(msg.tabId);
+            sendResponse(result);
+          });
           return true;
         }
         case 'PAGE_NAVIGATED': {

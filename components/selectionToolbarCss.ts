@@ -112,6 +112,35 @@ body {
   line-height: 16px;
 }
 
+/* 首次启用提示与动作工具条共用纸面，但不伪装成一排可点击按钮。 */
+.wisp-toolbar--discovery {
+  height: auto;
+  min-height: 46px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 7px 12px 8px;
+  animation: wisp-discovery-enter 180ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+.wisp-toolbar__hint-title {
+  color: #20241f;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 17px;
+}
+
+@keyframes wisp-discovery-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* 向右生长的 1px 苔绿线（--wisp-accent），语汇同 §5.9 的轨道线段 */
 .wisp-toolbar__line {
   flex: 0 0 auto;
@@ -132,6 +161,10 @@ body {
   .wisp-toolbar__btn,
   .wisp-toolbar__line {
     transition: none;
+  }
+
+  .wisp-toolbar--discovery {
+    animation: none;
   }
 }
 `;
