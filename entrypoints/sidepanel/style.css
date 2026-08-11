@@ -346,8 +346,27 @@ button {
   font-size: 14px;
 }
 
+.wisp-download-detail {
+  margin: -4px 0 12px;
+  color: var(--wisp-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+}
+
+.wisp-download-stalled {
+  margin: -2px 0 12px;
+  padding: 9px 10px;
+  color: var(--wisp-text);
+  background: var(--wisp-warning-soft);
+  border-left: 2px solid var(--wisp-warning);
+  border-radius: 0 5px 5px 0;
+  font-size: 11px;
+  line-height: 17px;
+}
+
 .wisp-file-tag {
-  margin: -2px 0 16px;
+  margin: 0 0 16px;
   overflow: hidden;
   color: var(--wisp-text-muted);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
@@ -759,6 +778,12 @@ button {
 }
 
 .wisp-page-empty {
+  min-height: 118px;
+  display: flex;
+  flex-direction: column;
+}
+
+.wisp-page-empty-primary {
   min-height: 62px;
   display: flex;
   align-items: center;
@@ -766,7 +791,8 @@ button {
   gap: 16px;
 }
 
-.wisp-page-empty div {
+.wisp-page-empty-primary > div,
+.wisp-selection-discovery > div:first-child {
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -791,13 +817,54 @@ button {
   line-height: 16px;
 }
 
-.wisp-page-empty strong {
+.wisp-page-empty-primary strong {
   font-size: 14px;
 }
 
-.wisp-page-empty span {
+.wisp-page-empty-primary span,
+.wisp-selection-discovery span {
   color: var(--wisp-text-muted);
   font-size: 11px;
+  line-height: 16px;
+}
+
+.wisp-selection-discovery {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0 8px;
+  border-top: 1px solid var(--wisp-border);
+}
+
+.wisp-selection-discovery strong {
+  color: var(--wisp-text);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 17px;
+}
+
+.wisp-selection-discovery-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.wisp-selection-discovery-actions span + span::before {
+  content: '·';
+  margin-right: 7px;
+  color: var(--wisp-border-strong);
+}
+
+@media (max-width: 359px) {
+  .wisp-selection-discovery {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
 }
 
 .wisp-action-bar {
@@ -805,6 +872,10 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.wisp-summary-readiness {
+  margin: 2px 0 10px;
 }
 
 .wisp-notice-pop {
