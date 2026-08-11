@@ -44,7 +44,14 @@ export function App() {
             <span>{statusLabel}</span>
           </div>
           {isSettings ? null : (
-            <button className="wisp-btn-nav" onClick={() => setView('settings')}>设置</button>
+            <button
+              className="wisp-btn-nav"
+              disabled={modelStatus === 'downloading'}
+              title={modelStatus === 'downloading' ? '下载完成或取消后可进入设置' : undefined}
+              onClick={() => setView('settings')}
+            >
+              设置
+            </button>
           )}
         </div>
       </header>

@@ -1,3 +1,5 @@
+import type { ModelSourceId } from './modelSource';
+
 export type Uuid = string;
 export type Lang = 'zh' | 'en' | 'other';
 export type SelectionAction = 'explain' | 'summarize' | 'rewrite' | 'translate';
@@ -12,6 +14,7 @@ export interface LoadProgress {
 export interface InitConfig {
   modelId: string;
   revision: string; // 必须是「下载前」锁定的确切 commit sha
+  sourceId: ModelSourceId; // 受控下载源；缓存恢复必须使用首次下载时的同一来源
   quant: { webgpu: 'q4f16'; wasm: 'q8' };
   backend?: 'webgpu' | 'wasm';
   cacheOnly?: boolean; // 若为 true，模型只使用本地 Cache，禁止联网下载缺失文件

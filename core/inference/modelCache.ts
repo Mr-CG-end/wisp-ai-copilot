@@ -1,8 +1,23 @@
 import { selectNewModelCacheUrls } from './cacheSelection';
+import {
+  DEFAULT_MODEL_SOURCE_ID,
+  isModelSourceId,
+  type ModelSourceId,
+} from './modelSource';
 
 export const MODEL_CACHE_MANIFEST_KEY = 'wisp:model-cache-manifest:v1';
 
 export interface ModelCacheManifest {
+  schema: 2;
+  sourceId: ModelSourceId;
+  modelId: string;
+  revision: string;
+  backend: 'webgpu' | 'wasm';
+  dtype: 'q4f16' | 'q8';
+  verifiedAt: number;
+}
+
+interface LegacyModelCacheManifest {
   schema: 1;
   modelId: string;
   revision: string;
@@ -11,20 +26,47 @@ export interface ModelCacheManifest {
   verifiedAt: number;
 }
 
+type ManifestFields = Omit<LegacyModelCacheManifest, 'schema'>;
+
+function hasValidManifestFields(manifest: Partial<ManifestFields>): boolean {
+  return Boolean(
+    manifest.modelId
+    && manifest.revision
+    && (manifest.backend === 'webgpu' || manifest.backend === 'wasm')
+    && (manifest.dtype === 'q4f16' || manifest.dtype === 'q8')
+    && typeof manifest.verifiedAt === 'number'
+    && Number.isFinite(manifest.verifiedAt),
+  );
+}
+
 export async function readCacheManifest(): Promise<ModelCacheManifest | null> {
   if (typeof chrome === 'undefined' || !chrome.storage?.local) return null;
   try {
     const data = await chrome.storage.local.get(MODEL_CACHE_MANIFEST_KEY);
-    const manifest = data[MODEL_CACHE_MANIFEST_KEY] as ModelCacheManifest | undefined;
+    const manifest = data[MODEL_CACHE_MANIFEST_KEY] as
+      | ModelCacheManifest
+      | LegacyModelCacheManifest
+      | undefined;
     if (
       manifest
-      && manifest.schema === 1
-      && manifest.modelId
-      && manifest.revision
-      && (manifest.backend === 'webgpu' || manifest.backend === 'wasm')
-      && (manifest.dtype === 'q4f16' || manifest.dtype === 'q8')
+      && manifest.schema === 2
+      && hasValidManifestFields(manifest)
+      && isModelSourceId(manifest.sourceId)
     ) {
       return manifest;
+    }
+    if (manifest && manifest.schema === 1 && hasValidManifestFields(manifest)) {
+      const migrated: ModelCacheManifest = {
+        ...manifest,
+        schema: 2,
+        sourceId: DEFAULT_MODEL_SOURCE_ID,
+      };
+      try {
+        await chrome.storage.local.set({ [MODEL_CACHE_MANIFEST_KEY]: migrated });
+      } catch {
+        // 迁移持久化失败不影响本次使用；下次读取会再次尝试。
+      }
+      return migrated;
     }
     return null;
   } catch {
@@ -33,6 +75,9 @@ export async function readCacheManifest(): Promise<ModelCacheManifest | null> {
 }
 
 export async function writeCacheManifest(manifest: ModelCacheManifest): Promise<void> {
+  if (!isModelSourceId(manifest.sourceId)) {
+    throw new Error(`UNKNOWN_MODEL_SOURCE:${String(manifest.sourceId)}`);
+  }
   if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
   await chrome.storage.local.set({ [MODEL_CACHE_MANIFEST_KEY]: manifest });
 }
@@ -49,9 +94,10 @@ export function checkCacheMatch(
     revision: string;
     backend?: 'webgpu' | 'wasm';
     dtype?: 'q4f16' | 'q8';
+    sourceId?: ModelSourceId;
   },
 ): boolean {
-  if (!manifest || manifest.schema !== 1) return false;
+  if (!manifest || manifest.schema !== 2 || !isModelSourceId(manifest.sourceId)) return false;
   if (manifest.modelId !== expected.modelId || manifest.revision !== expected.revision) {
     return false;
   }
@@ -59,6 +105,9 @@ export function checkCacheMatch(
     return false;
   }
   if (expected.dtype && manifest.dtype !== expected.dtype) {
+    return false;
+  }
+  if (expected.sourceId && manifest.sourceId !== expected.sourceId) {
     return false;
   }
   return true;

@@ -23,6 +23,7 @@ import { createModelProgress } from '../../core/inference/progress';
 import { SYSTEM_PROMPT, buildUserContent } from '../../core/inference/chatTemplate';
 import { ThinkFilter } from '../../core/inference/thinkFilter';
 import { StopperRegistry } from '../../core/inference/cancellation';
+import { getModelSource } from '../../core/inference/modelSource';
 
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
@@ -79,6 +80,9 @@ async function disposeLoaded(): Promise<void> {
 
 async function init(cfg: InitConfig, onProgress: (p: LoadProgress) => void): Promise<InitResult> {
   await disposeLoaded();
+  const source = getModelSource(cfg.sourceId);
+  env.remoteHost = source.remoteHost;
+  env.remotePathTemplate = source.remotePathTemplate;
   const backend = cfg.backend ?? 'webgpu';
   const dtype = backend === 'webgpu' ? cfg.quant.webgpu : cfg.quant.wasm;
   const progress = createModelProgress(onProgress);

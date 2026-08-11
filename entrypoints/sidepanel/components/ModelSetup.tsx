@@ -20,6 +20,12 @@ import {
   REVISION,
   WASM_MODEL_SIZE_MB,
 } from '../../../core/inference/modelIdentity';
+import {
+  createDownloadTelemetry,
+  type DownloadTelemetry,
+  type DownloadTelemetrySnapshot,
+} from '../../../core/inference/downloadTelemetry';
+import { DEFAULT_MODEL_SOURCE_ID } from '../../../core/inference/modelSource';
 import { selectSetupSteps } from '../../../core/panel/setupSteps';
 import { loadSettings, saveSettings } from '../../../core/storage/settings';
 import type { LoadProgress } from '../../../core/inference/contract';
@@ -37,6 +43,28 @@ function formatAvailableBytes(bytes: number | null): string {
   if (bytes === null) return '浏览器未提供';
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
   return `${Math.max(0, Math.round(bytes / 1024 ** 2))} MB`;
+}
+
+function formatDownloadMb(bytes: number): string {
+  const mb = bytes / 1024 ** 2;
+  return mb < 10 ? mb.toFixed(1) : String(Math.round(mb));
+}
+
+function formatDownloadSpeed(bytesPerSecond: number): string {
+  if (bytesPerSecond < 1024 ** 2) {
+    return `${Math.max(0.1, bytesPerSecond / 1024).toFixed(1)} KB/s`;
+  }
+  return `${(bytesPerSecond / 1024 ** 2).toFixed(1)} MB/s`;
+}
+
+function formatEta(seconds: number): string {
+  const rounded = Math.max(1, Math.ceil(seconds));
+  if (rounded < 60) return `${rounded} 秒`;
+  const minutes = Math.floor(rounded / 60);
+  const remainingSeconds = Math.ceil((rounded % 60) / 10) * 10;
+  if (remainingSeconds === 0) return `${minutes} 分钟`;
+  if (remainingSeconds === 60) return `${minutes + 1} 分钟`;
+  return `${minutes} 分 ${remainingSeconds} 秒`;
 }
 
 /**
@@ -83,16 +111,21 @@ export const ModelSetup: React.FC = () => {
     cached: 'webgpu' | 'wasm';
     preferred: 'webgpu' | 'wasm';
   } | null>(null);
+  const [downloadTelemetry, setDownloadTelemetry] = useState<DownloadTelemetrySnapshot | null>(null);
   /** 本次下载的是哪套权重，决定进度条按 570 还是 618 MB 报数。 */
   const [downloadingBackend, setDownloadingBackend] = useState<'webgpu' | 'wasm'>('webgpu');
   const initAttemptLock = useRef(false);
   const initAttemptRef = useRef(0);
   const initCacheBaselineRef = useRef<ReadonlySet<string> | null>(null);
+  const downloadTelemetryRef = useRef<DownloadTelemetry | null>(null);
 
-  const createProgressHandler = (attempt: number) => Comlink.proxy((p: LoadProgress) => {
+  const createProgressHandler = (attempt: number, trackDownload = false) => Comlink.proxy((p: LoadProgress) => {
     if (attempt !== initAttemptRef.current) return;
     setDownloadPct(Math.round(p.pct * 100) / 100);
     setCurrentFile(p.file);
+    if (trackDownload && downloadTelemetryRef.current) {
+      setDownloadTelemetry(downloadTelemetryRef.current.update(p, Date.now()));
+    }
   });
 
   /**
@@ -141,7 +174,14 @@ export const ModelSetup: React.FC = () => {
       try {
         const api = getApi();
         const res = await api.init(
-          { modelId: MODEL_ID, revision: REVISION, quant: QUANT, backend: manifest!.backend, cacheOnly: true },
+          {
+            modelId: MODEL_ID,
+            revision: REVISION,
+            sourceId: manifest!.sourceId,
+            quant: QUANT,
+            backend: manifest!.backend,
+            cacheOnly: true,
+          },
           createProgressHandler(attempt),
         );
         if (attempt !== initAttemptRef.current) return;
@@ -198,8 +238,19 @@ export const ModelSetup: React.FC = () => {
     void checkLocalCache();
     return () => {
       initAttemptRef.current += 1;
+      downloadTelemetryRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (modelStatus !== 'downloading') return;
+    const timer = window.setInterval(() => {
+      if (downloadTelemetryRef.current) {
+        setDownloadTelemetry(downloadTelemetryRef.current.snapshot(Date.now()));
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [modelStatus]);
 
   /** 改回已缓存的那个后端：写设置 → 重跑校验，随后走既有的 cacheOnly 恢复，不触发下载。 */
   const handleUseCachedBackend = async (backend: 'webgpu' | 'wasm') => {
@@ -220,6 +271,9 @@ export const ModelSetup: React.FC = () => {
     setBackendMismatch(null);
     setDownloadPct(0);
     setCurrentFile('');
+    const telemetry = createDownloadTelemetry(Date.now());
+    downloadTelemetryRef.current = telemetry;
+    setDownloadTelemetry(telemetry.snapshot(Date.now()));
 
     try {
       initCacheBaselineRef.current = await snapshotModelCacheUrls();
@@ -232,14 +286,21 @@ export const ModelSetup: React.FC = () => {
     try {
       const api = getApi();
       const res = await api.init(
-        { modelId: MODEL_ID, revision: REVISION, quant: QUANT, backend },
-        createProgressHandler(attempt),
+        {
+          modelId: MODEL_ID,
+          revision: REVISION,
+          sourceId: DEFAULT_MODEL_SOURCE_ID,
+          quant: QUANT,
+          backend,
+        },
+        createProgressHandler(attempt, true),
       );
       if (attempt !== initAttemptRef.current) return;
 
       if (res.ready) {
         await writeCacheManifest({
-          schema: 1,
+          schema: 2,
+          sourceId: DEFAULT_MODEL_SOURCE_ID,
           modelId: MODEL_ID,
           revision: REVISION,
           backend,
@@ -270,6 +331,7 @@ export const ModelSetup: React.FC = () => {
     } finally {
       if (attempt === initAttemptRef.current) {
         initCacheBaselineRef.current = null;
+        downloadTelemetryRef.current = null;
       }
     }
   };
@@ -282,13 +344,21 @@ export const ModelSetup: React.FC = () => {
     try {
       const api = getApi();
       const res = await api.init(
-        { modelId: MODEL_ID, revision: REVISION, quant: QUANT, backend: 'webgpu', cacheOnly: true },
+        {
+          modelId: MODEL_ID,
+          revision: REVISION,
+          sourceId: DEFAULT_MODEL_SOURCE_ID,
+          quant: QUANT,
+          backend: 'webgpu',
+          cacheOnly: true,
+        },
         createProgressHandler(attempt),
       );
       if (attempt !== initAttemptRef.current) return;
       if (res.ready) {
         await writeCacheManifest({
-          schema: 1,
+          schema: 2,
+          sourceId: DEFAULT_MODEL_SOURCE_ID,
           modelId: MODEL_ID,
           revision: REVISION,
           backend: 'webgpu',
@@ -323,6 +393,8 @@ export const ModelSetup: React.FC = () => {
     setModelStatus('uninitialized');
     setDownloadPct(0);
     setCurrentFile('');
+    downloadTelemetryRef.current = null;
+    setDownloadTelemetry(null);
     try {
       await purgeNewModelCacheEntries(baseline, MODEL_ID, REVISION);
     } catch (e) {
@@ -386,7 +458,21 @@ export const ModelSetup: React.FC = () => {
 
   if (modelStatus === 'downloading') {
     const totalMb = downloadingBackend === 'wasm' ? WASM_MODEL_SIZE_MB : MODEL_SIZE_MB;
-    const downloadedMb = Math.round(totalMb * downloadPct / 100);
+    const downloadedMb = downloadTelemetry?.total
+      ? formatDownloadMb(downloadTelemetry.loaded)
+      : String(Math.round(totalMb * downloadPct / 100));
+    const reportedTotalMb = downloadTelemetry?.total
+      ? formatDownloadMb(downloadTelemetry.total)
+      : String(totalMb);
+    const downloadDetail = downloadTelemetry?.preparing
+      ? '下载完成，正在加载模型并进行自检…'
+      : downloadTelemetry?.stalled
+        ? '连接较慢，正在等待数据…'
+      : downloadTelemetry?.bytesPerSecond && downloadTelemetry.etaSeconds
+        ? `${formatDownloadSpeed(downloadTelemetry.bytesPerSecond)} · 剩余约 ${formatEta(downloadTelemetry.etaSeconds)}`
+        : downloadTelemetry?.total
+          ? '正在测速…'
+          : '正在连接下载源…';
     return (
       <section className="wisp-setup-container" aria-live="polite" aria-busy="true">
         <SetupThread status={modelStatus} hasCache={hasLegacyCache} />
@@ -408,8 +494,14 @@ export const ModelSetup: React.FC = () => {
 
           <div className="wisp-progress-info">
             <strong>{downloadPct.toFixed(1)}%</strong>
-            <span>约 {downloadedMb} MB / {totalMb} MB</span>
+            <span>约 {downloadedMb} MB / {reportedTotalMb} MB</span>
           </div>
+          <div className="wisp-download-detail" aria-live="off">{downloadDetail}</div>
+          {downloadTelemetry?.stalled ? (
+            <div className="wisp-download-stalled" role="status">
+              已 15 秒未收到下载数据。可继续等待；若长时间不恢复，请检查网络后取消并重试。
+            </div>
+          ) : null}
           {currentFile ? <div className="wisp-file-tag" title={currentFile}>{currentFile}</div> : null}
 
           <button

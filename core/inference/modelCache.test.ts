@@ -1,9 +1,16 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelCacheManifest } from './modelCache';
-import { checkCacheMatch, countModelCacheEntries } from './modelCache';
+import {
+  MODEL_CACHE_MANIFEST_KEY,
+  checkCacheMatch,
+  countModelCacheEntries,
+  readCacheManifest,
+  writeCacheManifest,
+} from './modelCache';
 
 const validManifest: ModelCacheManifest = {
-  schema: 1,
+  schema: 2,
+  sourceId: 'huggingface',
   modelId: 'onnx-community/Qwen3-0.6B-ONNX',
   revision: 'da1453100cf3ff33ef56d17983fc7a8648706db6',
   backend: 'webgpu',
@@ -54,6 +61,75 @@ describe('checkCacheMatch', () => {
       revision: validManifest.revision,
       dtype: 'q8',
     })).toBe(false);
+  });
+
+  it('指定 sourceId 时必须完全匹配', () => {
+    expect(checkCacheMatch(validManifest, {
+      modelId: validManifest.modelId,
+      revision: validManifest.revision,
+      sourceId: 'huggingface',
+    })).toBe(true);
+  });
+});
+
+describe('cache manifest schema', () => {
+  const set = vi.fn();
+
+  beforeEach(() => {
+    set.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubStorage(value: unknown): void {
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: {
+          get: vi.fn().mockResolvedValue({ [MODEL_CACHE_MANIFEST_KEY]: value }),
+          set,
+        },
+      },
+    });
+  }
+
+  it('读取 v1 清单时无损迁移为默认 Hugging Face 源并持久化', async () => {
+    const legacy = {
+      schema: 1,
+      modelId: validManifest.modelId,
+      revision: validManifest.revision,
+      backend: validManifest.backend,
+      dtype: validManifest.dtype,
+      verifiedAt: validManifest.verifiedAt,
+    } as const;
+    stubStorage(legacy);
+
+    await expect(readCacheManifest()).resolves.toEqual(validManifest);
+    expect(set).toHaveBeenCalledWith({ [MODEL_CACHE_MANIFEST_KEY]: validManifest });
+  });
+
+  it('迁移写入失败时仍返回迁移后的清单', async () => {
+    set.mockRejectedValue(new Error('storage unavailable'));
+    stubStorage({ ...validManifest, schema: 1, sourceId: undefined });
+
+    await expect(readCacheManifest()).resolves.toEqual(validManifest);
+  });
+
+  it('拒绝带未知 sourceId 的 v2 清单', async () => {
+    stubStorage({ ...validManifest, sourceId: 'mirror' });
+
+    await expect(readCacheManifest()).resolves.toBeNull();
+  });
+
+  it('拒绝写入未知 sourceId', async () => {
+    stubStorage(null);
+
+    await expect(writeCacheManifest({
+      ...validManifest,
+      sourceId: 'mirror' as never,
+    })).rejects.toThrow('UNKNOWN_MODEL_SOURCE:mirror');
+    expect(set).not.toHaveBeenCalled();
   });
 });
 
