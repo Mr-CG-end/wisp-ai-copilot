@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { defaultTargetLang } from '../../../core/extract/selection';
+import { assessSummaryReadiness } from '../../../core/extract/summaryReadiness';
 import { selectSummaryContext } from '../../../core/extract/summaryContext';
 import { truncateForContext } from '../../../core/extract/truncate';
 import { isCtxCurrent } from '../../../core/panel/taskGuard';
@@ -124,6 +125,17 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
   const turns = selectTurns(history, currentTask, streamBuffer);
   const [now, setNow] = useState(() => Date.now());
 
+  const summaryReadiness = useMemo(() => (
+    page
+      ? assessSummaryReadiness({
+          text: page.text,
+          title: page.title,
+          url: page.url,
+          method: page.method,
+        })
+      : null
+  ), [page]);
+
   // 凭证的相对时刻每 30s 刷新一次；只更新一个数字，不触发生成链路
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -201,7 +213,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
   };
 
   const handleGenerateSummary = async () => {
-    if (!page) return;
+    if (!page || summaryReadiness?.decision === 'reject') return;
     const context = prepareGenerationContext('summary', page.text, performanceConfig);
     const result = await runGeneration({
       taskType: 'summary',
@@ -350,6 +362,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
       return;
     }
     if (!page || isHistoricalResult) return;
+    if (currentTask.type === 'summary' && summaryReadiness?.decision === 'reject') return;
     const context = prepareGenerationContext(currentTask.type, page.text, performanceConfig);
     const result = await runGeneration({
       taskType: currentTask.type,
@@ -449,16 +462,40 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
             </div>
           </div>
 
-          <div className="wisp-action-bar" aria-label="页面操作">
-            <button
-              className={`wisp-btn ${turns.length === 0 ? 'wisp-btn-primary' : 'wisp-btn-secondary'}`}
-              disabled={isGenerating}
-              onClick={() => void handleGenerateSummary()}
-            >
-              生成摘要
-            </button>
-            {copyNotice ? <span className="wisp-notice-pop" aria-hidden="true">{copyNotice}</span> : null}
-          </div>
+          {summaryReadiness?.decision !== 'reject' || copyNotice ? (
+            <div className="wisp-action-bar" aria-label="页面操作">
+              {summaryReadiness?.decision !== 'reject' ? (
+                <button
+                  className={`wisp-btn ${turns.length === 0 ? 'wisp-btn-primary' : 'wisp-btn-secondary'}`}
+                  disabled={isGenerating}
+                  onClick={() => void handleGenerateSummary()}
+                >
+                  {summaryReadiness?.decision === 'warn' ? '仍然生成摘要' : '生成摘要'}
+                </button>
+              ) : null}
+              {copyNotice ? <span className="wisp-notice-pop" aria-hidden="true">{copyNotice}</span> : null}
+            </div>
+          ) : null}
+
+          {summaryReadiness?.decision === 'warn' ? (
+            <div className="wisp-status-banner is-warning wisp-summary-readiness">
+              <strong>这页内容比较零散</strong>
+              <span>摘要可能遗漏上下文或混淆彼此独立的条目，请在生成后核对原文。</span>
+            </div>
+          ) : null}
+
+          {summaryReadiness?.decision === 'reject' ? (
+            <div className="wisp-status-banner is-warning wisp-summary-readiness">
+              <strong>这页不适合生成文章摘要</strong>
+              <span>
+                {summaryReadiness.reason === 'activity_feed'
+                  ? '当前读取到的主要是动态列表。为避免把彼此无关的条目拼成结论，Wisp 没有生成摘要。你仍可以划词总结具体内容，或基于快照提问。'
+                  : summaryReadiness.reason === 'insufficient_content'
+                    ? '当前读取到的正文太少，无法形成可靠摘要。可以重新读取页面、划词总结具体内容，或基于快照提问。'
+                    : '当前读取到的内容过于零散，缺少可可靠概括的连续正文。可以划词总结具体内容，或基于快照提问。'}
+              </span>
+            </div>
+          ) : null}
         </>
       ) : null}
 
@@ -485,7 +522,11 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
                 // page 为 null 时「与当前快照不同」这句话不成立，一律不显示来源行
                 isStale={page !== null && turn.sourceUrl !== page.ctx.url}
                 isStopping={isStopping}
-                canRegenerate={turn.isCurrent && canRerunCurrent}
+                canRegenerate={
+                  turn.isCurrent
+                  && canRerunCurrent
+                  && !(turn.type === 'summary' && summaryReadiness?.decision === 'reject')
+                }
                 selectionText={task?.selectionText}
                 targetLang={task?.targetLang === 'en' ? 'en' : 'zh'}
                 onTargetLangChange={
@@ -503,7 +544,13 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
       ) : page ? (
         <div className="wisp-state-empty">
           <strong>生成结果会显示在这里</strong>
-          <span>可以先生成摘要，或在下方基于快照提问。</span>
+          <span>
+            {summaryReadiness?.decision === 'reject'
+              ? '仍可在下方基于快照提问，或划选具体内容处理。'
+              : summaryReadiness?.decision === 'warn'
+                ? '可以生成摘要，但内容比较零散，请结合原文核对；也可以在下方基于快照提问。'
+                : '可以先生成摘要，或在下方基于快照提问。'}
+          </span>
         </div>
       ) : (
         <div className="wisp-page-empty">
