@@ -546,7 +546,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
               disabled={!qaInput.trim() || isGenerating}
               onClick={() => void handleSendQa()}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
+              <svg viewBox="0 0 24 24" aria-hidden="true" style={{ transform: 'rotate(-45deg)', transformOrigin: 'center' }}>
                 <path d="M4 5.5 20 12 4 18.5l2.4-5.2L14 12l-7.6-1.3L4 5.5Z" />
               </svg>
             </button>
