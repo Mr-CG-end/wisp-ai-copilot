@@ -121,6 +121,22 @@ export function useTaskRunner() {
     }
   }, [flushPendingStream]);
 
+  /**
+   * 只负责通知 Worker 中断，不碰 store。
+   *
+   * 这是一次 Comlink 往返，而 Worker 在生成期间卡在 model.generate() 里 ——
+   * 这条消息要排到它腾出手才被处理，回话可能是十几秒之后的事。
+   * 因此调用方必须自己决定「要不要等」，store 侧的状态转换一律不许挂在它后面。
+   */
+  const requestWorkerCancel = useCallback(async (signalId: Uuid) => {
+    try {
+      await getApi().cancel(signalId);
+    } catch (e) {
+      console.error('[wisp] cancel failed:', e);
+    }
+  }, [getApi]);
+
+  /** 用户点「停止」：等回话是对的 —— 按钮要一直显示「正在停止…」直到中断真的送达。 */
   const stop = useCallback(async () => {
     const signalId = activeSignalIdRef.current;
     if (!signalId) return;
@@ -128,14 +144,11 @@ export function useTaskRunner() {
     flushPendingStream(signalId);
     cancelTask(signalId);
     try {
-      const api = getApi();
-      await api.cancel(signalId);
-    } catch (e) {
-      console.error('[wisp] cancel failed:', e);
+      await requestWorkerCancel(signalId);
     } finally {
       setIsStopping(false);
     }
-  }, [getApi, cancelTask, flushPendingStream]);
+  }, [requestWorkerCancel, cancelTask, flushPendingStream]);
 
   const runGeneration = useCallback(
     async (options: RunOptions) => {
@@ -155,8 +168,15 @@ export function useTaskRunner() {
         return null;
       }
 
-      if (activeSignalIdRef.current) {
-        await stop();
+      // 抢占在途任务。三步全部在本次同步段内完成，绝不能 await ——
+      // 走 stop() 会等 api.cancel 的回话，而那条消息排在 Worker 当前这整段生成后面。
+      // 真机现象：被抢占的那一轮立刻变「已停止」（cancelTask 是同步的），
+      // 新一轮却要十几秒后才出现在纸面上，看起来就像「停止了但没有新一轮」。
+      const preempted = activeSignalIdRef.current;
+      if (preempted) {
+        flushPendingStream(preempted);
+        cancelTask(preempted);
+        void requestWorkerCancel(preempted);
       }
 
       const signalId = crypto.randomUUID();
@@ -311,7 +331,16 @@ export function useTaskRunner() {
         }
       }
     },
-    [getApi, startTask, enqueueStream, flushPendingStream, finishTask, failTask, stop],
+    [
+      getApi,
+      startTask,
+      enqueueStream,
+      flushPendingStream,
+      finishTask,
+      failTask,
+      cancelTask,
+      requestWorkerCancel,
+    ],
   );
 
   return {
