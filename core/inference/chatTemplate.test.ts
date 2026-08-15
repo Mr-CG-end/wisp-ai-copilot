@@ -11,7 +11,7 @@ describe('SYSTEM_PROMPT.summary', () => {
 
   it('不把网页材料预设为一篇文章', () => {
     expect(prompt).toContain('代表性材料');
-    expect(prompt).toContain('若材料是连续正文');
+    expect(prompt).toContain('不是全文');
     expect(prompt).not.toContain('这篇讲的是什么');
   });
 
@@ -23,9 +23,13 @@ describe('SYSTEM_PROMPT.summary', () => {
     expect(prompt).toContain('共同目的、因果关系或方法');
   });
 
-  it('材料不足时要求如实说明而不是强行列点', () => {
-    expect(prompt).toContain('无法从现有材料可靠概括主旨');
-    expect(prompt).toContain('不要猜测、补齐或仍然强行列出要点');
+  // 「材料能不能摘要」由 assessSummaryReadiness 判定，提示词里不再重复一遍：
+  // 让模型自己判断，它会把判断过程当成答案输出给用户。
+  it('不要求模型自行判断能否摘要，也不要求它写出判断过程', () => {
+    expect(prompt).not.toContain('先判断');
+    expect(prompt).not.toContain('若材料是连续正文');
+    expect(prompt).not.toContain('无法从现有材料可靠概括主旨');
+    expect(prompt).toContain('不要写出判断过程');
     expect(prompt).not.toContain('JSON');
   });
 });
