@@ -89,4 +89,21 @@ describe('appendMessage', () => {
     expect((await database.messages.get(id))?.content).toBe('回答 b');
     expect((await database.sessions.get('b'))!.updatedAt).toBeGreaterThanOrEqual(before);
   });
+
+  it('不传 ttlMs 时不动到期时间', async () => {
+    await appendMessage(database, 'b', 'assistant', '回答 b', 'qa');
+    expect((await database.sessions.get('b'))!.expiresAt).toBe(500);
+  });
+
+  /**
+   * 保留期是「最后一次用过之后再留多久」。自动续接让一条会话可以跨天连续使用，
+   * 到期时间若钉死在创建时刻，会在用户正用着的时候把它连同消息一起清掉。
+   */
+  it('传 ttlMs 时按本次写入把到期时间往后滑', async () => {
+    const before = Date.now();
+    await appendMessage(database, 'b', 'assistant', '回答 b', 'qa', 1000);
+    const { expiresAt } = (await database.sessions.get('b'))!;
+    expect(expiresAt).toBeGreaterThanOrEqual(before + 1000);
+    expect(expiresAt).toBeLessThanOrEqual(Date.now() + 1000);
+  });
 });

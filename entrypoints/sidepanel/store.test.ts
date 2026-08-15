@@ -204,6 +204,45 @@ describe('usePanelStore', () => {
     );
   });
 
+  it('restoreHistory 把落库轮次铺回空轨迹', () => {
+    const store = usePanelStore.getState();
+    store.restoreHistory([
+      { ...sampleTask, id: 'old-1', status: 'success', output: '上次的摘要' },
+    ]);
+    expect(usePanelStore.getState().history.map((entry) => entry.id)).toEqual(['old-1']);
+  });
+
+  /**
+   * 恢复是异步的，期间用户完全可能已经跑完一轮。轨迹非空还硬塞，
+   * 已经在轨道上的那一轮会被挤到恢复出来的历史后面，编号一起错乱。
+   */
+  it('轨迹已有内容时 restoreHistory 不覆盖', () => {
+    const store = usePanelStore.getState();
+    store.startTask(sampleTask);
+    store.appendStream('task-1', '本次的输出');
+    store.finishTask('task-1');
+    store.startTask({ ...sampleTask, id: 'task-2' });
+
+    store.restoreHistory([
+      { ...sampleTask, id: 'old-1', status: 'success', output: '上次的摘要' },
+    ]);
+    expect(usePanelStore.getState().history.map((entry) => entry.id)).toEqual(['task-1']);
+  });
+
+  /** 在途轮次挂在 currentTask 上而不在 history 里，因此恢复与它并存时顺序天然正确。 */
+  it('恢复历史与在途轮次并存时，历史排在前面', () => {
+    const store = usePanelStore.getState();
+    store.startTask(sampleTask);
+    store.appendStream('task-1', '正在生成');
+    store.restoreHistory([
+      { ...sampleTask, id: 'old-1', status: 'success', output: '上次的摘要' },
+    ]);
+
+    const state = usePanelStore.getState();
+    expect(selectTurns(state.history, state.currentTask, state.streamBuffer).map((t) => t.id))
+      .toEqual(['old-1', 'task-1']);
+  });
+
   it('cancelTask 保留 streamBuffer 并改状态为 cancelled', () => {
     const store = usePanelStore.getState();
     store.startTask(sampleTask);

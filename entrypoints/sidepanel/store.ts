@@ -90,6 +90,7 @@ export interface PanelStoreState {
   setDownloadPct: (pct: number) => void;
   setBoundCtx: (boundCtx: TaskContext | null) => void;
   setPage: (page: PageInfo | null) => void;
+  restoreHistory: (entries: TaskHistoryEntry[]) => void;
   startTask: (task: CurrentTask, options?: { archiveCurrent?: boolean }) => void;
   appendStream: (taskId: Uuid, text: string) => void;
   finishTask: (taskId: Uuid, result?: { truncated?: boolean }) => void;
@@ -128,6 +129,19 @@ export const usePanelStore = create<PanelStoreState>((set) => ({
   setBoundCtx: (boundCtx) => set({ boundCtx }),
 
   setPage: (page) => set({ page }),
+
+  /**
+   * 把落库的旧轮次铺回轨迹。恢复是异步的，期间用户完全可能已经开始新一轮，
+   * 因此「轨迹是否仍为空」必须在 set 内部判定，不能由调用方先读后写 ——
+   * 那中间隔着一次 await，判据会过期。
+   *
+   * 轨迹非空即放弃：硬塞会把已经在跑的轮次挤到恢复出来的历史后面，编号一起错乱。
+   * 在途轮次留在 currentTask 上，不在 history 里，所以「恢复历史 + 当前轮仍在生成」
+   * 这一种叠加是安全的，顺序天然正确。
+   */
+  restoreHistory: (entries) => set((state) => (
+    state.history.length > 0 || entries.length === 0 ? state : { history: entries }
+  )),
 
   startTask: (task, options) => set((state) => {
     const shouldArchive = options?.archiveCurrent !== false;

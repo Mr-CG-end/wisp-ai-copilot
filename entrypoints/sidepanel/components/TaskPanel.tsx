@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { defaultTargetLang, detectLang } from '../../../core/extract/selection';
 import { assessSummaryReadiness } from '../../../core/extract/summaryReadiness';
 import { selectSummaryContext } from '../../../core/extract/summaryContext';
@@ -12,10 +12,19 @@ import {
 import { selectionBudget } from '../../../core/panel/selectionBudget';
 import { selectTurns } from '../../../core/panel/thread';
 import { appendMessage } from '../../../core/storage/cleanup';
-import { DAY_MS, db, DEFAULT_RETENTION_DAYS } from '../../../core/storage/db';
+import {
+  DAY_MS,
+  db,
+  DEFAULT_RETENTION_DAYS,
+  SNAPSHOT_TEXT_CHARS,
+  type SessionSnapshot,
+} from '../../../core/storage/db';
+import { pickResumableSession, type RestoredTurn } from '../../../core/storage/sessionRestore';
+import { rememberTabSession } from '../../../core/storage/tabSessions';
 import type { Lang, SelectionAction, TaskContext, Uuid } from '../../../core/messaging/types';
-import type { CurrentTask, TaskType } from '../store';
+import type { CurrentTask, PageInfo, TaskHistoryEntry, TaskType } from '../store';
 import { usePanelStore } from '../store';
+import { loadResumableSession } from '../sessionResume';
 import type { usePageChannel } from '../usePageChannel';
 import { useTaskRunner, type GenerationRunResult } from '../useTaskRunner';
 import { SnapshotStamp } from './SnapshotStamp';
@@ -56,42 +65,105 @@ function selectionSourceLang(text: string | undefined): 'zh' | 'en' | undefined 
   return lang === 'zh' || lang === 'en' ? lang : undefined;
 }
 
-async function ensureSession(
-  page: { title: string },
-  ctx: TaskContext,
-): Promise<Uuid | null> {
-  if (chrome.extension.inIncognitoContext) return null;
-
-  const existing = await db.sessions.where('tabId').equals(ctx.tabId).first();
-  if (existing?.url === ctx.url) return existing.id;
-
-  const id = crypto.randomUUID();
-  const now = Date.now();
+/** 保留期语义是「最后一次用过之后再留多久」，因此换算成时长而不是绝对时刻。 */
+async function retentionTtlMs(): Promise<number> {
   const { retentionDays = DEFAULT_RETENTION_DAYS } = await chrome.storage.local.get('retentionDays');
-  await db.sessions.add({
-    id,
-    tabId: ctx.tabId,
-    url: ctx.url,
-    title: page.title,
-    incognito: false,
-    createdAt: now,
-    updatedAt: now,
-    expiresAt: now + (retentionDays === 0 ? DAY_MS : retentionDays * DAY_MS),
-  });
+  return retentionDays === 0 ? DAY_MS : retentionDays * DAY_MS;
+}
+
+function toSessionSnapshot(page: PageInfo): SessionSnapshot {
+  return {
+    text: page.text.slice(0, SNAPSHOT_TEXT_CHARS),
+    charCount: page.charCount,
+    truncated: page.truncated || page.text.length > SNAPSHOT_TEXT_CHARS,
+    method: page.method,
+    readAt: page.readAt,
+  };
+}
+
+async function ensureSession(
+  ctx: TaskContext,
+  title: string,
+  snapshot: SessionSnapshot | undefined,
+  ttlMs: number,
+): Promise<Uuid | null> {
+  // 一个标签页在生命周期里会走过多个 URL，tabId 上因此可能挂着好几条会话。
+  // 原先取的是 `.where('tabId').first()` —— 索引里的任意一条，只要它不是当前 URL
+  // 就再建一条新的。于是同一页反复使用会不断长出重复会话，续接时也认不出该接哪条。
+  const candidates = await db.sessions.where('tabId').equals(ctx.tabId).toArray();
+  const existing = pickResumableSession(candidates, ctx.url);
+
+  const id = existing?.id ?? crypto.randomUUID();
+  if (existing) {
+    // 重新读取过页面就换一份存档快照；readAt 变了即为新快照，不必比对两千字正文。
+    if (snapshot && snapshot.readAt !== existing.snapshot?.readAt) {
+      await db.sessions.update(id, { snapshot });
+    }
+  } else {
+    const now = Date.now();
+    await db.sessions.add({
+      id,
+      tabId: ctx.tabId,
+      url: ctx.url,
+      title,
+      incognito: false,
+      createdAt: now,
+      updatedAt: now,
+      expiresAt: now + ttlMs,
+      snapshot,
+    });
+  }
+
+  // 续接窗口的准入凭据。放在这里而不是只在新建时写：会话可能是上一次面板生命
+  // 建的，那次写的条目已经随标签页关闭或浏览器重启被清掉了。
+  await rememberTabSession(ctx.tabId, id, ctx.url);
   return id;
 }
 
 async function persistGeneration(
-  page: { title: string },
+  page: PageInfo | { title: string },
   ctx: TaskContext,
   taskType: TaskType,
   userContent: string,
   assistantContent: string,
 ): Promise<void> {
-  const sessionId = await ensureSession(page, ctx);
+  if (chrome.extension.inIncognitoContext) return;
+  // 划词进来的那条路径没有整页快照，只有一个用于辨认的标题。
+  const snapshot = 'text' in page ? toSessionSnapshot(page) : undefined;
+  const ttlMs = await retentionTtlMs();
+  const sessionId = await ensureSession(ctx, page.title, snapshot, ttlMs);
   if (!sessionId) return;
-  await appendMessage(db, sessionId, 'user', userContent, taskType);
-  await appendMessage(db, sessionId, 'assistant', assistantContent, taskType);
+  await appendMessage(db, sessionId, 'user', userContent, taskType, ttlMs);
+  await appendMessage(db, sessionId, 'assistant', assistantContent, taskType, ttlMs);
+}
+
+/**
+ * 恢复出来的轮次一律标成已完成、不可重跑。
+ *
+ * 「重新生成」要拿原始上下文重新送一遍模型，而上下文（整页正文的哪一段、当时的
+ * 性能档预算）并没有落库。轮次进 history 后 selectTurns 给的 isCurrent 就是 false，
+ * 按钮天然是灰的；epoch 填 -1 只是把「不属于当前这次页面生命」记在明面上。
+ */
+function restoredToHistory(
+  turns: readonly RestoredTurn[],
+  session: { title: string; url: string },
+  tabId: number,
+): TaskHistoryEntry[] {
+  return turns.map((turn) => ({
+    id: turn.id,
+    type: turn.type as TaskType,
+    ctx: { tabId, url: session.url, epoch: -1 },
+    status: 'success' as const,
+    retryable: false,
+    // 会话标题只记得建会话那一次的来源。划词轮次各有各的选区，用它自己的文字重算
+    // 标签，否则一条会话里每一轮都会顶着第一段选区的名字。
+    source: turn.selectionText
+      ? selectionLabel(session.url, turn.selectionText)
+      : session.title,
+    userInput: turn.userInput,
+    selectionText: turn.selectionText,
+    output: turn.output,
+  }));
 }
 
 function prepareGenerationContext(
@@ -129,6 +201,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
   const performanceProfile = usePanelStore((s) => s.performanceProfile);
   const setPerformanceProfile = usePanelStore((s) => s.setPerformanceProfile);
   const setPage = usePanelStore((s) => s.setPage);
+  const restoreHistory = usePanelStore((s) => s.restoreHistory);
 
   const { runGeneration, stop, preemptCurrent, isStopping } = useTaskRunner();
   const [qaInput, setQaInput] = useState('');
@@ -154,6 +227,48 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  /** 本次面板生命里已经试过续接的 URL；boundCtx 每次读取都会换一个新对象。 */
+  const resumeAttemptedRef = useRef<Set<string>>(new Set());
+
+  /**
+   * 绑定到某一页时，把这一页上次聊到的内容接回来。
+   *
+   * 触发点选在 boundCtx 而不是面板挂载：面板刚起来时只知道 tabId，不知道 URL，
+   * 而 URL 是认领会话的判据。划词（adoptCtx）与读取页面（commitBoundCtx）两条路径
+   * 都会经过这里，一个 effect 覆盖两种进入方式。
+   *
+   * 按 URL 记「已尝试」而不是记一个布尔：同一页反复重新读取只查一次库，
+   * 换到另一页时该查还得查。
+   */
+  useEffect(() => {
+    const ctx = boundCtx;
+    if (!ctx?.url || resumeAttemptedRef.current.has(ctx.url)) return;
+    resumeAttemptedRef.current.add(ctx.url);
+    void (async () => {
+      const resumed = await loadResumableSession(ctx).catch((error) => {
+        console.error('[wisp] resume session', error);
+        return null;
+      });
+      if (!resumed) return;
+      restoreHistory(restoredToHistory(resumed.turns, resumed, ctx.tabId));
+      // 存档快照只在没有实时快照时顶上：从「读取当前页」进来的那条路径紧接着就会
+      // setPage 一份刚读到的真快照，那份永远更准。判断放在 await 之后重新取，
+      // 因为读取与本次查询是并行的。
+      if (resumed.snapshot && !usePanelStore.getState().page) {
+        setPage({
+          ctx,
+          title: resumed.title,
+          url: resumed.url,
+          text: resumed.snapshot.text,
+          charCount: resumed.snapshot.charCount,
+          truncated: resumed.snapshot.truncated,
+          method: resumed.snapshot.method,
+          readAt: resumed.snapshot.readAt,
+        });
+      }
+    })();
+  }, [boundCtx, restoreHistory, setPage]);
 
   const isCrossTab = Boolean(activeTab && boundCtx && activeTab.tabId !== boundCtx.tabId);
   const isGenerating = currentTask?.status === 'loading';

@@ -4,6 +4,7 @@ import { isSamePageTarget } from '../core/messaging/navigation';
 import { PendingActionStore } from '../core/messaging/pending';
 import { purgeByTab, purgeExpired } from '../core/storage/cleanup';
 import { db, DEFAULT_RETENTION_DAYS } from '../core/storage/db';
+import { forgetTabSession } from '../core/storage/tabSessions';
 import type {
   ActiveTabInfo,
   BackgroundToPanel,
@@ -105,6 +106,10 @@ export default defineBackground(() => {
       persistEpochs();
       broadcast({ type: 'EPOCH_INVALIDATED', tabId, epoch: -1 });
     });
+    // 标签页一关，这条会话就不再自动续接了（记录本身仍按保留期留在库里，
+    // 供设置页回看）。删的是准入凭据，不是数据。
+    void forgetTabSession(tabId)
+      .catch((error) => console.error('[wisp] forgetTabSession', error));
     void chrome.storage.local
       .get('retentionDays')
       .then(({ retentionDays = DEFAULT_RETENTION_DAYS }) => {
