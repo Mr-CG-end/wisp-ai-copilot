@@ -1,8 +1,5 @@
-import { createElement, type ReactNode } from 'react';
-import { flushSync } from 'react-dom';
-import { createRoot, type Root } from 'react-dom/client';
 import type { ShadowRootContentScriptUi } from 'wxt/utils/content-script-ui/shadow-root';
-import { SelectionToolbar } from '../components/SelectionToolbar';
+import { createToolbarHost, type ToolbarHost, type ToolbarProps } from '../components/selectionToolbar';
 import { TOOLBAR_CSS } from '../components/selectionToolbarCss';
 import { extractArticle } from '../core/extract/article';
 import { detectLang, isSelectionUsable, normalizeSelection } from '../core/extract/selection';
@@ -55,8 +52,8 @@ export default defineContentScript({
 
     // ————————————————— 划词工具条 ————————————————— //
 
-    let toolbarUi: ShadowRootContentScriptUi<Root> | null = null;
-    let toolbarUiPromise: Promise<ShadowRootContentScriptUi<Root>> | null = null;
+    let toolbarUi: ShadowRootContentScriptUi<ToolbarHost> | null = null;
+    let toolbarUiPromise: Promise<ShadowRootContentScriptUi<ToolbarHost>> | null = null;
     /** 当前选区快照。按钮发出去的是它，不是点击那一刻的 window.getSelection()。 */
     let pending: { text: string; lang: Lang } | null = null;
     /** 就地反馈/提示播放中：其间不再重算选区，否则自己触发的 mouseup 会打断动效。 */
@@ -75,9 +72,9 @@ export default defineContentScript({
      * 「每次显示都新建」在反复划词后会累积几十个监听器与几十个 shadow host；
      * 复用同一个实例也天然满足「任意时刻只有一个工具条」。
      */
-    function ensureToolbarUi(): Promise<ShadowRootContentScriptUi<Root>> {
+    function ensureToolbarUi(): Promise<ShadowRootContentScriptUi<ToolbarHost>> {
       if (!toolbarUiPromise) {
-        toolbarUiPromise = createShadowRootUi<Root>(ctx, {
+        toolbarUiPromise = createShadowRootUi<ToolbarHost>(ctx, {
           // 两段 kebab-case 是 attachShadow 对自定义元素名的硬性要求
           name: 'wisp-selection-toolbar',
           position: 'overlay',
@@ -92,9 +89,9 @@ export default defineContentScript({
             container.style.margin = '0';
             container.style.zIndex = '2147483647';
             container.style.display = 'none';
-            return createRoot(container);
+            return createToolbarHost(container);
           },
-          onRemove: (root) => root?.unmount(),
+          onRemove: (host) => host?.destroy(),
         })
           .then((ui) => {
             ui.mount();
@@ -110,23 +107,23 @@ export default defineContentScript({
       return toolbarUiPromise;
     }
 
-    /** 同步提交：落点要按真实尺寸算，React 18 默认的异步提交会让紧随其后的测量读到 0。 */
-    function renderToolbar(ui: ShadowRootContentScriptUi<Root>, node: ReactNode): void {
-      flushSync(() => ui.mounted?.render(node));
-    }
-
-    /** 先以不可见状态量出真实尺寸再落位：宽度由文字撑开，写死会在别的字体下裁掉字。 */
+    /**
+     * 先以不可见状态量出真实尺寸再落位：宽度由文字撑开，写死会在别的字体下裁掉字。
+     *
+     * 手写 DOM 的写入本身就是同步的，量之前不再需要逼一次同步提交
+     * （原先这里是 flushSync —— React 18 默认的异步提交会让紧随其后的测量读到 0）。
+     */
     function placeAt(
-      ui: ShadowRootContentScriptUi<Root>,
+      ui: ShadowRootContentScriptUi<ToolbarHost>,
       rect: ToolbarPositionInput['rect'],
-      node: ReactNode,
+      props: ToolbarProps,
     ): void {
       const container = ui.uiContainer;
       container.style.display = 'block';
       container.style.visibility = 'hidden';
       container.style.left = '0';
       container.style.top = '0';
-      renderToolbar(ui, node);
+      ui.mounted?.render(props);
       const box = container.getBoundingClientRect();
       const { left, top } = clampToolbarPosition({
         rect,
@@ -140,15 +137,15 @@ export default defineContentScript({
 
     /** 首次启用提示没有选区锚点，固定在视口底部居中，且不参与宿主页面布局。 */
     function placeAtViewportBottom(
-      ui: ShadowRootContentScriptUi<Root>,
-      node: ReactNode,
+      ui: ShadowRootContentScriptUi<ToolbarHost>,
+      props: ToolbarProps,
     ): void {
       const container = ui.uiContainer;
       container.style.display = 'block';
       container.style.visibility = 'hidden';
       container.style.left = '0';
       container.style.top = '0';
-      renderToolbar(ui, node);
+      ui.mounted?.render(props);
       const box = container.getBoundingClientRect();
       const margin = 12;
       const left = Math.max(margin, Math.min(
@@ -166,7 +163,7 @@ export default defineContentScript({
       holding = false;
       if (!toolbarUi) return;
       toolbarUi.uiContainer.style.display = 'none';
-      // 渲染空树：不给宿主页面的 Tab 序列留下四个隐形按钮
+      // 清空内容：不给宿主页面的 Tab 序列留下四个隐形按钮
       toolbarUi.mounted?.render(null);
     }
 
@@ -206,7 +203,7 @@ export default defineContentScript({
 
     async function showToolbar(rect: ToolbarPositionInput['rect']): Promise<void> {
       const seq = ++showSeq;
-      let ui: ShadowRootContentScriptUi<Root>;
+      let ui: ShadowRootContentScriptUi<ToolbarHost>;
       try {
         ui = await ensureToolbarUi();
       } catch (error) {
@@ -217,16 +214,8 @@ export default defineContentScript({
       if (seq !== showSeq || !pending) return;
       teardownUi();
       lastRect = rect;
-      placeAt(
-        ui,
-        rect,
-        createElement(SelectionToolbar, {
-          // 每次显示都是新实例：上一次的反馈态不会被 React 复用
-          key: seq,
-          onAction: sendAction,
-          onDismiss: hide,
-        }),
-      );
+      // 每次 render 都整棵重建，上一次的反馈态不会残留（原先靠 React key 换实例达成）
+      placeAt(ui, rect, { onAction: sendAction, onDismiss: hide });
     }
 
     /** OPEN_PANEL_HINT 渲染在工具条原位：它是工具条的一个状态，不是另开一个浮层。 */
@@ -236,16 +225,12 @@ export default defineContentScript({
       void ensureToolbarUi()
         .then((ui) => {
           holding = true;
-          placeAt(
-            ui,
-            rect,
-            createElement(SelectionToolbar, {
-              key: `hint-${++showSeq}`,
-              hint: OPEN_PANEL_HINT_TEXT,
-              onAction: sendAction,
-              onDismiss: hide,
-            }),
-          );
+          showSeq += 1;
+          placeAt(ui, rect, {
+            hint: OPEN_PANEL_HINT_TEXT,
+            onAction: sendAction,
+            onDismiss: hide,
+          });
         })
         .catch(() => undefined);
     }
@@ -262,17 +247,13 @@ export default defineContentScript({
         .then((ui) => {
           if (seq !== showSeq || pending) return;
           teardownUi();
-          placeAtViewportBottom(
-            ui,
-            createElement(SelectionToolbar, {
-              key: `discovery-${seq}`,
-              hint: DISCOVERY_HINT_TITLE,
-              hintDetail: DISCOVERY_HINT_DETAIL,
-              hintDurationMs: DISCOVERY_HINT_MS,
-              onAction: sendAction,
-              onDismiss: hide,
-            }),
-          );
+          placeAtViewportBottom(ui, {
+            hint: DISCOVERY_HINT_TITLE,
+            hintDetail: DISCOVERY_HINT_DETAIL,
+            hintDurationMs: DISCOVERY_HINT_MS,
+            onAction: sendAction,
+            onDismiss: hide,
+          });
         })
         .catch(() => undefined);
     }
