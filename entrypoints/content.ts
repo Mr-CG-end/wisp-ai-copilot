@@ -6,7 +6,10 @@ import { detectLang, isSelectionUsable, normalizeSelection } from '../core/extra
 import { isSensitiveSelection } from '../core/extract/sensitive';
 import { shouldInvalidateNavigation } from '../core/messaging/navigation';
 import { clampToolbarPosition, type ToolbarPositionInput } from '../core/panel/toolbarPosition';
-import { markSelectionDiscoveryCompleted } from '../core/storage/uiHints';
+import {
+  isSelectionDiscoveryCompleted,
+  markSelectionDiscoveryCompleted,
+} from '../core/storage/uiHints';
 import {
   PORT_NAME,
   type BackgroundToContent,
@@ -28,13 +31,26 @@ const SELECTION_SETTLE_MS = 70;
  * 不写「点击 Wisp 图标」：v0.1 还没有图标资产，用户认不出哪个是它。
  */
 const OPEN_PANEL_HINT_TEXT = '点击浏览器工具栏上的扩展图标继续';
-const DISCOVERY_HINT_TITLE = 'Wisp 划词已启用';
-const DISCOVERY_HINT_DETAIL = '选中文字即可解释、总结、改写或翻译';
+// 文案不提「启用」：常驻注入之后划词本来就一直可用，说「已启用」等于凭空造出一个
+// 用户从没做过的动作，反而让人去找关掉它的开关。
+const DISCOVERY_HINT_TITLE = '划选网页文字';
+const DISCOVERY_HINT_DETAIL = 'Wisp 可以解释、总结、改写或翻译';
 const DISCOVERY_HINT_MS = 4000;
 
 export default defineContentScript({
-  registration: 'runtime',
-  matches: [],
+  // 常驻注入（推翻设计文档 §3.2 的「按需注入」决策）。
+  //
+  // 原决策的理由是「有权限不等于该自动注入」。真机核对推翻了它：按需注入意味着
+  // 划词只在「点过扩展图标的那一次页面加载」里可用 —— 不跨刷新、不跨标签页，
+  // 用户在 chrome://extensions 启用了扩展却发现到处都不能划词，这不是可解释的行为。
+  //
+  // 主机权限本来就已经是全站 http(s)（见 wxt.config.ts），因此这条不新增任何安装提示；
+  // 换来的代价是每个页面都要解析一次 content script，所以先做了工具条去 React
+  // （200.09 kB → 60.36 kB）才开这一步。
+  matches: ['http://*/*', 'https://*/*'],
+  // 跨域 iframe 不保证支持（PRD F-03 边界），开了只会让广告框里也弹工具条
+  allFrames: false,
+  runAt: 'document_idle',
   main(ctx) {
     const w = window as unknown as { __wisp?: true };
     if (w.__wisp) return;
@@ -62,8 +78,6 @@ export default defineContentScript({
     let lastRect: ToolbarPositionInput['rect'] | null = null;
     let settleTimer = 0;
     let showSeq = 0;
-    /** action 点击与 Panel ENSURE 可能连续通知，同一页面生命周期只展示一次。 */
-    let discoveryHintShown = false;
 
     /**
      * Shadow Root 全页只建一次。
@@ -240,8 +254,6 @@ export default defineContentScript({
      * seq 防止 Shadow Root 首次挂载的 await 晚于一次真实选区，从而把工具条盖回提示。
      */
     function showSelectionDiscovery(): void {
-      if (discoveryHintShown) return;
-      discoveryHintShown = true;
       const seq = ++showSeq;
       void ensureToolbarUi()
         .then((ui) => {
@@ -252,7 +264,13 @@ export default defineContentScript({
             hintDetail: DISCOVERY_HINT_DETAIL,
             hintDurationMs: DISCOVERY_HINT_MS,
             onAction: sendAction,
-            onDismiss: hide,
+            onDismiss: () => {
+              // 完整显示满一次就算「已发现」，从此不再出现。若用户在这 4 秒内划词，
+              // 提示会被真实工具条顶掉、根本走不到这里 —— 那种情况由 sendAction
+              // 里的同一个标记兜住。两条路都不走，就说明用户没看完，下个页面再提示一次。
+              void markSelectionDiscoveryCompleted().catch(() => undefined);
+              hide();
+            },
           });
         })
         .catch(() => undefined);
@@ -410,9 +428,6 @@ export default defineContentScript({
         case 'OPEN_PANEL_HINT':
           showHint();
           return false;
-        case 'SHOW_SELECTION_DISCOVERY':
-          showSelectionDiscovery();
-          return false;
         default:
           return false;
       }
@@ -453,5 +468,16 @@ export default defineContentScript({
         }
       });
     });
+
+    // ————————————————— 首次发现提示 ————————————————— //
+
+    // 常驻注入之后，「点扩展图标」不再是启用动作，用户完全可能先划词、后才想到去点图标；
+    // 把提示绑在那个时刻上等于把它藏起来。因此改由 CS 自己在页面加载时问一次 storage。
+    // 一次异步 get 的成本可以忽略，而让 SW 推要每个页面唤醒一次 Service Worker。
+    void isSelectionDiscoveryCompleted()
+      .then((completed) => {
+        if (!completed) showSelectionDiscovery();
+      })
+      .catch(() => undefined);
   },
 });

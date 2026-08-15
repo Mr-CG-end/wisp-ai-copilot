@@ -65,8 +65,10 @@ export type BackgroundToPanel =
 // SW → Content Script 通道，统一纳入联合类型，避免两端消息名静默漂移。
 export type BackgroundToContent =
   | { type: 'PING' }              // 探活，CS 回 { type: 'PONG' }
-  | { type: 'OPEN_PANEL_HINT' }   // 面板无法程序化打开时，请 CS 就地提示用户点图标
-  | { type: 'SHOW_SELECTION_DISCOVERY' }; // 首次使用前，提示当前页已启用划词
+  | { type: 'OPEN_PANEL_HINT' };  // 面板无法程序化打开时，请 CS 就地提示用户点图标
+// 原有第三条 SHOW_SELECTION_DISCOVERY 已删除：常驻注入后不再有「点图标启用」这个时刻，
+// 首次发现提示改由 Content Script 自己在页面加载时读 storage 决定（见 content.ts）。
+// 让 SW 推等于每个页面加载都要唤醒一次 Service Worker，MV3 冷启动会让提示飘。
 
 // —— runtime 响应体（sendResponse 的形状，Panel 侧按此解构）—— //
 export interface ActiveTabInfo { tabId: number; epoch: number; }

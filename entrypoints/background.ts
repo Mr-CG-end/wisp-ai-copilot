@@ -4,7 +4,6 @@ import { isSamePageTarget } from '../core/messaging/navigation';
 import { PendingActionStore } from '../core/messaging/pending';
 import { purgeByTab, purgeExpired } from '../core/storage/cleanup';
 import { db, DEFAULT_RETENTION_DAYS } from '../core/storage/db';
-import { isSelectionDiscoveryCompleted } from '../core/storage/uiHints';
 import type {
   ActiveTabInfo,
   BackgroundToPanel,
@@ -57,27 +56,34 @@ export default defineBackground(() => {
   }
 
   /**
-   * 页面提示只是可发现性增强，存储或消息失败都不能阻断注入与面板打开主链路。
-   * 同一 Content Script 会自行去重 action 点击与 Panel ENSURE 可能造成的双路通知。
+   * 声明式注入只对「注册之后加载的页面」生效。扩展安装或重新加载的那一刻，用户手上
+   * 已经打开的标签页里没有 Content Script，不刷新就不能划词 —— 开发时每点一次
+   * 「重新加载扩展」，正在真机核对的那一批页面会集体失效，很容易被误判成 bug。
+   *
+   * 这里补一次注入把它们接上。受限页面（chrome://、Web Store、PDF 查看器）注入失败，
+   * 忽略即可；重复注入由 CS 自己的 window.__wisp 守卫挡掉。
    */
-  async function maybeShowSelectionDiscovery(tabId: number): Promise<void> {
-    try {
-      if (await isSelectionDiscoveryCompleted()) return;
-      await chrome.tabs.sendMessage(tabId, { type: 'SHOW_SELECTION_DISCOVERY' });
-    } catch {
-      /* 提示失败不影响主功能 */
-    }
-  }
+  chrome.runtime.onInstalled.addListener(() => {
+    void chrome.tabs
+      .query({ url: ['http://*/*', 'https://*/*'] })
+      .then((tabs) => {
+        for (const tab of tabs) {
+          if (tab.id === undefined) continue;
+          void chrome.scripting
+            .executeScript({ target: { tabId: tab.id }, files: [CONTENT_SCRIPT_FILE] })
+            .catch(() => undefined);
+        }
+      })
+      .catch((error) => console.error('[wisp] backfill inject', error));
+  });
 
   chrome.action.onClicked.addListener((tab) => {
     if (tab.windowId === undefined) return;
     if (tab.id !== undefined) {
-      const tabId = tab.id;
-      // action 点击会授予当前标签页 activeTab；趁授权仍有效时预先注入，
-      // 避免 Side Panel 已打开后再点“读取当前页”丢失授权。
-      void ensureContentScript(tabId).then((result) => {
-        if (result.ok) void maybeShowSelectionDiscovery(tabId);
-      });
+      // 常驻注入之后这里通常只是一次 PING 探活。仍然保留：用户若在
+      // chrome://extensions 把站点访问收窄为「点击时」，声明式注入不会发生，
+      // action 点击授予的 activeTab 是这一页唯一的注入机会。
+      void ensureContentScript(tab.id);
     }
     chrome.sidePanel
       .open({ windowId: tab.windowId })
@@ -160,10 +166,7 @@ export default defineBackground(() => {
           return true;
         }
         case 'ENSURE_CONTENT_SCRIPT': {
-          void ensureContentScript(msg.tabId).then((result) => {
-            if (result.ok) void maybeShowSelectionDiscovery(msg.tabId);
-            sendResponse(result);
-          });
+          void ensureContentScript(msg.tabId).then(sendResponse);
           return true;
         }
         case 'PAGE_NAVIGATED': {

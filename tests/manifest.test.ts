@@ -15,6 +15,11 @@ if (!hasManifest) {
 interface ExtensionManifest {
   permissions?: string[];
   host_permissions?: string[];
+  content_scripts?: {
+    matches?: string[];
+    all_frames?: boolean;
+    run_at?: string;
+  }[];
   content_security_policy?: {
     extension_pages?: string;
   };
@@ -59,6 +64,19 @@ describe.skipIf(!hasManifest)('生产扩展 manifest', () => {
     expect(granted).not.toContain('tabs');
     expect(granted).not.toContain('webNavigation');
     expect(granted).not.toContain('<all_urls>');
+  });
+
+  /**
+   * 划词常驻注入的三个参数写死在断言里：注入范围与主机权限一致（不多不少）、
+   * 不进 iframe、不抢在 document_idle 之前。这三条任何一条被改动都是产品口径变更，
+   * 应当先改这里再改实现。
+   */
+  it('划词 content script 常驻注入，范围与主机权限一致且不进 iframe', () => {
+    const scripts = manifest?.content_scripts ?? [];
+    expect(scripts).toHaveLength(1);
+    expect([...(scripts[0].matches ?? [])].sort()).toEqual(EXPECTED_HOST_PERMISSIONS);
+    expect(scripts[0].all_frames ?? false).toBe(false);
+    expect(scripts[0].run_at).toBe('document_idle');
   });
 
   it('生产 CSP 只允许既定的五个模型下载主机', () => {
