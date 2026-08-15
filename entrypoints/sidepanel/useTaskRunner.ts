@@ -140,6 +140,16 @@ export function useTaskRunner() {
   const runGeneration = useCallback(
     async (options: RunOptions) => {
       const boundCtx = usePanelStore.getState().boundCtx;
+      // 划词投递链路的诊断锚点之一。这个守卫是「点了工具条却一轮都没出现」的
+      // 头号嫌疑：它一旦早退，既不建轮次也不抢占在途任务，屏幕上什么都不会变。
+      if (import.meta.env.DEV) {
+        console.debug('[wisp:diag] runGeneration 入口', {
+          taskType: options.taskType,
+          ctx: options.ctx,
+          boundCtx,
+          passed: isCtxCurrent(options.ctx, boundCtx),
+        });
+      }
       if (!isCtxCurrent(options.ctx, boundCtx)) {
         console.warn('[wisp] task target ctx is not current boundCtx');
         return null;
@@ -154,6 +164,19 @@ export function useTaskRunner() {
       pendingStreamRef.current = { taskId: signalId, text: '' };
       streamFlushIntervalRef.current = options.streamFlushIntervalMs
         ?? DEFAULT_STREAM_FLUSH_INTERVAL_MS;
+
+      // 归档判据只看 currentTask 的状态与 streamBuffer 是否为空，两者都在这一刻定型。
+      // 「摘要变已停止但新一轮没出现」若真发生，前后两条日志会直接指出是哪一半失灵。
+      if (import.meta.env.DEV) {
+        const before = usePanelStore.getState();
+        console.debug('[wisp:diag] startTask 前', {
+          historyLen: before.history.length,
+          currentTaskId: before.currentTask?.id ?? null,
+          currentStatus: before.currentTask?.status ?? null,
+          streamChars: before.streamBuffer.length,
+          archiveCurrent: options.archivePrevious !== false,
+        });
+      }
 
       startTask(
         {
@@ -171,6 +194,15 @@ export function useTaskRunner() {
         },
         { archiveCurrent: options.archivePrevious !== false },
       );
+
+      if (import.meta.env.DEV) {
+        const after = usePanelStore.getState();
+        console.debug('[wisp:diag] startTask 后', {
+          historyLen: after.history.length,
+          currentTaskId: after.currentTask?.id ?? null,
+          currentStatus: after.currentTask?.status ?? null,
+        });
+      }
 
       const req: GenerateRequest = {
         taskType: options.taskType,

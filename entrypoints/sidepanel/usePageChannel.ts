@@ -20,6 +20,29 @@ export interface PageChannelError {
   message: string;
 }
 
+/**
+ * 诊断日志：页面通道被判失效时打出来源。
+ *
+ * 六个调用点全都会 commitBoundCtx(null)，而那会顺带把在途轮次判成失败并弹出
+ * 「页面读取已中断」——用户看到的现象一模一样，来源却完全不同（epoch 广播 /
+ * Port 导航通知 / Port 断开 / 主动换页）。不标来源就无从分辨。DEV 构建专用。
+ */
+function logChannelInvalidation(
+  source: string,
+  bound: TaskContext | null,
+  detail?: Record<string, unknown>,
+): void {
+  if (!import.meta.env.DEV) return;
+  const state = usePanelStore.getState();
+  console.debug('[wisp:diag] 页面通道失效', {
+    source,
+    boundCtx: bound,
+    currentTaskId: state.currentTask?.id ?? null,
+    currentStatus: state.currentTask?.status ?? null,
+    ...detail,
+  });
+}
+
 export function usePageChannel() {
   const portRef = useRef<chrome.runtime.Port | null>(null);
   const requestSlotRef = useRef(new RequestSlot<ContentToPanel>());
@@ -69,6 +92,14 @@ export function usePageChannel() {
   }, [commitBoundCtx]);
 
   const offerPendingAction = useCallback((entry: PendingActionEntry) => {
+    if (import.meta.env.DEV) {
+      console.debug('[wisp:diag] 收到划词动作', {
+        id: entry.id,
+        action: entry.action,
+        ctx: entry.ctx,
+        duplicate: seenActionIdsRef.current.has(entry.id),
+      });
+    }
     if (seenActionIdsRef.current.has(entry.id)) return;
     seenActionIdsRef.current.add(entry.id);
     pendingActionRef.current = entry;
@@ -92,6 +123,7 @@ export function usePageChannel() {
 
   const closePort = useCallback(() => {
     const port = portRef.current;
+    logChannelInvalidation('closePort', boundCtxRef.current, { hadPort: Boolean(port) });
     portRef.current = null;
     requestSlotRef.current.cancel('PORT_CLOSED');
     commitBoundCtx(null);
@@ -108,6 +140,10 @@ export function usePageChannel() {
       if (msg.type === 'EPOCH_INVALIDATED') {
         const bound = boundCtxRef.current;
         if (!bound || bound.tabId !== msg.tabId) return;
+        logChannelInvalidation('EPOCH_INVALIDATED', bound, {
+          msgTabId: msg.tabId,
+          msgEpoch: msg.epoch,
+        });
         requestSlotRef.current.cancel('PAGE_CHANGED');
         commitBoundCtx(null);
         setLastError({ code: 'TAB_CHANGED', message: '页面已导航或关闭，旧任务已作废' });
@@ -165,6 +201,7 @@ export function usePageChannel() {
     const port = chrome.tabs.connect(info.tabId, { name: PORT_NAME });
     port.onMessage.addListener((msg: ContentToPanel) => {
       if (msg.type === 'PAGE_UNLOADING' || msg.type === 'PAGE_NAVIGATED') {
+        logChannelInvalidation(`Port:${msg.type}`, boundCtxRef.current, { via: 'bindActiveTab' });
         requestSlotRef.current.cancel('PAGE_CHANGED');
         commitBoundCtx(null);
         setLastError({ code: 'TAB_CHANGED', message: '页面已跳转，旧任务已作废，可重新读取本页' });
@@ -174,6 +211,7 @@ export function usePageChannel() {
     });
     port.onDisconnect.addListener(() => {
       if (portRef.current !== port) return;
+      logChannelInvalidation('Port:onDisconnect', boundCtxRef.current, { via: 'bindActiveTab' });
       portRef.current = null;
       requestSlotRef.current.cancel('PORT_CLOSED');
       commitBoundCtx(null);
@@ -290,6 +328,7 @@ export function usePageChannel() {
       const nextCtx: TaskContext = { ...reply.ctx, tabId: info.tabId };
       candidatePort.onMessage.addListener((msg: ContentToPanel) => {
         if (msg.type === 'PAGE_UNLOADING' || msg.type === 'PAGE_NAVIGATED') {
+          logChannelInvalidation(`Port:${msg.type}`, boundCtxRef.current, { via: 'readActivePage' });
           requestSlotRef.current.cancel('PAGE_CHANGED');
           commitBoundCtx(null);
           setLastError({ code: 'TAB_CHANGED', message: '页面已跳转，旧任务已作废，可重新读取本页' });
@@ -299,6 +338,7 @@ export function usePageChannel() {
       });
       candidatePort.onDisconnect.addListener(() => {
         if (portRef.current !== candidatePort) return;
+        logChannelInvalidation('Port:onDisconnect', boundCtxRef.current, { via: 'readActivePage' });
         portRef.current = null;
         requestSlotRef.current.cancel('PORT_CLOSED');
         commitBoundCtx(null);

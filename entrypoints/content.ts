@@ -319,13 +319,21 @@ export default defineContentScript({
       navigationType?: string,
       sameDocument?: boolean,
     ) => {
-      if (!shouldInvalidateNavigation({
+      const decision = {
         currentUrl: lastUrl,
         nextUrl,
         navigationType,
         sameDocument,
         msSinceScroll: performance.now() - lastScrollAt,
-      })) {
+      };
+      const invalidate = shouldInvalidateNavigation(decision);
+      // 判定为真会一路作废到面板（PAGE_NAVIGATED → commitBoundCtx(null) → 在途轮次转失败），
+      // 而站点在滚动或点击时顺手 replaceState/pushState 是很常见的事。四个输入连同结论
+      // 一起打出来，才分得清「用户真的换页了」和「这条判据误报了」。
+      if (import.meta.env.DEV) {
+        console.debug('[wisp:diag] 导航判定', { ...decision, invalidate });
+      }
+      if (!invalidate) {
         lastUrl = nextUrl;
         return;
       }

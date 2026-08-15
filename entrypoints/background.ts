@@ -42,8 +42,16 @@ export default defineBackground(() => {
     chrome.runtime.sendMessage(msg).catch(() => undefined);
   }
 
-  function invalidateEpoch(tabId: number): void {
+  /**
+   * `source` 只服务诊断：epoch 递增有两条通道（Chrome 的 tabs.onUpdated 与
+   * Content Script 自报的 SPA 导航），两者引发的面板现象完全一样——在途轮次转失败、
+   * 弹「页面读取已中断」——但成因和修法不同，不标来源在 console 里分不出是哪一条。
+   */
+  function invalidateEpoch(tabId: number, source: string): void {
     const epoch = epochs.bump(tabId);
+    if (import.meta.env.DEV) {
+      console.debug('[wisp:diag] epoch 递增', { tabId, epoch, source });
+    }
     persistEpochs();
     broadcast({ type: 'EPOCH_INVALIDATED', tabId, epoch });
   }
@@ -81,7 +89,7 @@ export default defineBackground(() => {
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.status !== 'loading') return;
     void hydrated.then(() => {
-      invalidateEpoch(tabId);
+      invalidateEpoch(tabId, 'tabs.onUpdated:loading');
     });
   });
 
@@ -161,7 +169,7 @@ export default defineBackground(() => {
         case 'PAGE_NAVIGATED': {
           const tabId = sender.tab?.id;
           if (tabId === undefined) return false;
-          void hydrated.then(() => invalidateEpoch(tabId));
+          void hydrated.then(() => invalidateEpoch(tabId, 'content:PAGE_NAVIGATED'));
           return false;
         }
         case 'TOOLBAR_ACTION': {
@@ -175,7 +183,10 @@ export default defineBackground(() => {
           // 簿记晚几毫秒到达没有影响。
           chrome.sidePanel
             .open({ tabId })
-            .catch(() => {
+            .catch((error) => {
+              // 原文照打：核对清单 A1 要的就是这句 rejection message，它决定
+              // 「用户手势能否跨 CS→SW 往返保持有效」这条未决项的结论。
+              console.error('[wisp] sidePanel.open (TOOLBAR_ACTION)', error);
               chrome.tabs.sendMessage(tabId, { type: 'OPEN_PANEL_HINT' }).catch(() => undefined);
             });
           // sender.tab.url 在常驻主机权限下可读，取值也必须在同步段完成。
@@ -184,7 +195,20 @@ export default defineBackground(() => {
             // epoch 时序的廉价双保险：CS 报的选区 URL 与 SW 眼里这个标签页的
             // 当前 URL 不是同一页，说明选区与点击之间发生了导航，此时 epochs.get()
             // 会填上新页面的 epoch，任务看起来「当前有效」实则用的是旧选区。丢弃即可。
-            if (senderUrl && !isSamePageTarget(msg.url, senderUrl)) return;
+            if (senderUrl && !isSamePageTarget(msg.url, senderUrl)) {
+              // 这条分支原本完全静默：动作既不入 pending 也不广播，面板永远收不到，
+              // 用户看到的现象是「点了工具条，什么都没发生」。不打日志就无从发现
+              // 问题出在 SW 而不是面板。
+              if (import.meta.env.DEV) {
+                console.debug('[wisp:diag] 划词动作被丢弃：选区 URL 与标签页当前 URL 不同页', {
+                  action: msg.action,
+                  selectionUrl: msg.url,
+                  senderUrl,
+                  tabId,
+                });
+              }
+              return;
+            }
             const entry = {
               id: crypto.randomUUID(),
               action: msg.action,
@@ -193,6 +217,13 @@ export default defineBackground(() => {
               ctx: { tabId, url: msg.url, epoch: epochs.get(tabId) },
             };
             pending.put(entry, Date.now());
+            if (import.meta.env.DEV) {
+              console.debug('[wisp:diag] 划词动作已投递', {
+                id: entry.id,
+                action: entry.action,
+                ctx: entry.ctx,
+              });
+            }
             broadcast({ type: 'PENDING_ACTION', ...entry });
           });
           return false;
