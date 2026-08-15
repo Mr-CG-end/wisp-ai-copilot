@@ -130,7 +130,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
   const setPerformanceProfile = usePanelStore((s) => s.setPerformanceProfile);
   const setPage = usePanelStore((s) => s.setPage);
 
-  const { runGeneration, stop, isStopping } = useTaskRunner();
+  const { runGeneration, stop, preemptCurrent, isStopping } = useTaskRunner();
   const [qaInput, setQaInput] = useState('');
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   const performanceConfig = PERFORMANCE_CONFIGS[performanceProfile];
@@ -215,7 +215,9 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
   };
 
   const handleReadActivePage = async () => {
-    if (isGenerating) await stop();
+    // 不等 Worker 回话：那条消息排在当前这整段生成后面，await 它会让读取动作
+    // 一起停摆十几秒，界面看起来像点了没反应。轮次转「已停止」是同步的，用户立刻看得到。
+    if (isGenerating) preemptCurrent();
     const result = await readActivePage();
     if (!result) return;
     setPage({
@@ -233,7 +235,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
 
   const handleRereadBoundPage = async () => {
     if (!boundCtx || isCrossTab) return;
-    if (isGenerating) await stop();
+    if (isGenerating) preemptCurrent();
     const result = await readPage('reread', boundCtx);
     if (!result) return;
     setPage({
@@ -634,7 +636,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
               disabled={!qaInput.trim() || isGenerating}
               onClick={() => void handleSendQa()}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true" style={{ transform: 'rotate(-45deg)', transformOrigin: 'center' }}>
+              <svg viewBox="0 0 24 24" aria-hidden="true" style={{ position: 'relative', left: '2px', transform: 'rotate(-45deg)', transformOrigin: 'center' }}>
                 <path d="M4 5.5 20 12 4 18.5l2.4-5.2L14 12l-7.6-1.3L4 5.5Z" />
               </svg>
             </button>

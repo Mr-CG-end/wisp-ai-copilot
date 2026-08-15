@@ -136,6 +136,21 @@ export function useTaskRunner() {
     }
   }, [getApi]);
 
+  /**
+   * 放弃在途轮次：store 侧的状态转换在同步段内完成，Worker 侧的中断只发不等。
+   *
+   * 与 stop() 的区别只在「等不等回话」。凡是紧接着还要做别的事的调用方都该用这个 ——
+   * api.cancel 的回话排在 Worker 当前这整段生成后面，await 它会让后续动作一起停摆
+   * 十几秒。真机 A6（抢占摘要）与「生成中点读取当前页」都是同一个成因。
+   */
+  const preemptCurrent = useCallback((): void => {
+    const signalId = activeSignalIdRef.current;
+    if (!signalId) return;
+    flushPendingStream(signalId);
+    cancelTask(signalId);
+    void requestWorkerCancel(signalId);
+  }, [flushPendingStream, cancelTask, requestWorkerCancel]);
+
   /** 用户点「停止」：等回话是对的 —— 按钮要一直显示「正在停止…」直到中断真的送达。 */
   const stop = useCallback(async () => {
     const signalId = activeSignalIdRef.current;
@@ -168,16 +183,9 @@ export function useTaskRunner() {
         return null;
       }
 
-      // 抢占在途任务。三步全部在本次同步段内完成，绝不能 await ——
-      // 走 stop() 会等 api.cancel 的回话，而那条消息排在 Worker 当前这整段生成后面。
-      // 真机现象：被抢占的那一轮立刻变「已停止」（cancelTask 是同步的），
-      // 新一轮却要十几秒后才出现在纸面上，看起来就像「停止了但没有新一轮」。
-      const preempted = activeSignalIdRef.current;
-      if (preempted) {
-        flushPendingStream(preempted);
-        cancelTask(preempted);
-        void requestWorkerCancel(preempted);
-      }
+      // 必须是同步的 preemptCurrent 而不是 await stop()：后者会把下面的 startTask
+      // 一起押到 Worker 回话之后，真机现象就是「被抢占那轮立刻变已停止，新一轮迟迟不出现」。
+      preemptCurrent();
 
       const signalId = crypto.randomUUID();
       activeSignalIdRef.current = signalId;
@@ -338,14 +346,14 @@ export function useTaskRunner() {
       flushPendingStream,
       finishTask,
       failTask,
-      cancelTask,
-      requestWorkerCancel,
+      preemptCurrent,
     ],
   );
 
   return {
     runGeneration,
     stop,
+    preemptCurrent,
     isStopping,
   };
 }

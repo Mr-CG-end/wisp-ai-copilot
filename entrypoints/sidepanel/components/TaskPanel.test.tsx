@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   },
   runGeneration: vi.fn(async (_options: unknown) => null),
   appendMessage: vi.fn(async () => {}),
+  stop: vi.fn(async () => {}),
+  preemptCurrent: vi.fn(),
 }));
 
 vi.mock('../../../core/extract/summaryReadiness', () => ({
@@ -25,7 +27,8 @@ vi.mock('../../../core/extract/summaryReadiness', () => ({
 vi.mock('../useTaskRunner', () => ({
   useTaskRunner: () => ({
     runGeneration: mocks.runGeneration,
-    stop: vi.fn(async () => {}),
+    stop: mocks.stop,
+    preemptCurrent: mocks.preemptCurrent,
     isStopping: false,
   }),
 }));
@@ -191,6 +194,8 @@ describe('TaskPanel 摘要就绪度分流', () => {
 describe('TaskPanel 异常态入口收口', () => {
   beforeEach(() => {
     mocks.runGeneration.mockClear();
+    mocks.stop.mockClear();
+    mocks.preemptCurrent.mockClear();
     mocks.readiness.value = { decision: 'allow', signals: [] };
     usePanelStore.getState().reset();
     usePanelStore.setState({
@@ -262,6 +267,33 @@ describe('TaskPanel 异常态入口收口', () => {
 
     expect(buttonsByText(container, '生成摘要')).toHaveLength(0);
     expect(buttonByText(container, '重新生成').disabled).toBe(false);
+  });
+
+  /**
+   * 与 useTaskRunner 的抢占同源：api.cancel 的回话排在 Worker 当前这整段生成后面，
+   * await 它会让读取动作一起停摆十几秒，界面看着像点了没反应。
+   */
+  it('生成中点「读取当前页」不等 Worker 回话', async () => {
+    usePanelStore.setState({
+      page: null,
+      currentTask: {
+        id: 'summary-1',
+        type: 'summary',
+        ctx,
+        status: 'loading',
+        retryable: true,
+        source: 'GitHub profile',
+      },
+      streamBuffer: '半截摘要',
+    });
+    const readActivePage = vi.fn(async () => null);
+    const container = await renderPanel({ readActivePage });
+
+    await act(async () => { buttonByText(container, '读取当前页').click(); });
+
+    expect(mocks.preemptCurrent).toHaveBeenCalledOnce();
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(readActivePage).toHaveBeenCalledOnce();
   });
 
   it('摘要轮失败但无法重跑时，动作条保留「生成摘要」，不至于一个入口都没有', async () => {
