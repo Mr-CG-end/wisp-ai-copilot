@@ -2,6 +2,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+/**
+ * 本文件断言的是**构建产物**，不是源码，因此它读到的永远是磁盘上那一份 manifest ——
+ * 可能是上一次构建留下的。`npm run verify` 为此把 build 排在 test 之前；
+ * 单独跑 `npm test` 时若刚改过 wxt.config.ts 或 entrypoint 的注册参数，
+ * 请先 `npm run build`，否则这里比对的是旧产物。
+ */
 const MANIFEST_PATH = path.resolve(process.cwd(), '.output/chrome-mv3/manifest.json');
 const hasManifest = existsSync(MANIFEST_PATH);
 

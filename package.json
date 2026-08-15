@@ -10,7 +10,7 @@
     "test": "vitest run",
     "test:manifest": "vitest run tests/manifest.test.ts",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && npm test && npm run build && npm run test:manifest",
+    "verify": "npm run typecheck && npm run build && npm test && npm run test:manifest",
     "bench:extraction": "vitest run core/bench/extractionCorpus.bench.ts",
     "postinstall": "wxt prepare"
   },
