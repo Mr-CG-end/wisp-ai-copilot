@@ -13,6 +13,8 @@ interface TurnViewProps {
   selectionText?: string;
   /** 翻译轮次的目标语言与切换回调；只有同时给出才渲染下拉 */
   targetLang?: 'zh' | 'en';
+  /** 选区原文语言；用于置灰「译为原文语言」那一项。原文非中英时不传 */
+  sourceLang?: 'zh' | 'en';
   onTargetLangChange?: (lang: 'zh' | 'en') => void;
   onCopy: () => void;
   onRegenerate: () => void;
@@ -32,7 +34,7 @@ function hostOf(url: string): string {
  * 历史不是「另一种东西」，只是轨道上更早的节点。
  */
 export const TurnView: React.FC<TurnViewProps> = ({
-  turn, isStale, isStopping, canRegenerate, selectionText, targetLang,
+  turn, isStale, isStopping, canRegenerate, selectionText, targetLang, sourceLang,
   onTargetLangChange, onCopy, onRegenerate, onStop,
 }) => {
   const isGenerating = turn.status === 'loading';
@@ -59,12 +61,17 @@ export const TurnView: React.FC<TurnViewProps> = ({
                 <select
                   className="wisp-turn-lang"
                   aria-label="翻译目标语言"
+                  // 「译为原文语言」那一项置灰：选中它会拿原文重跑一次翻译，
+                  // 模型基本原样抄回，屏幕上看起来像是把刚才的译文又翻了回来。
+                  title={sourceLang
+                    ? `原文是${sourceLang === 'zh' ? '中文' : '英文'}，不提供译为同一语言`
+                    : undefined}
                   value={targetLang ?? 'zh'}
                   disabled={!canRegenerate}
                   onChange={(event) => onTargetLangChange(event.target.value as 'zh' | 'en')}
                 >
-                  <option value="zh">译为中文</option>
-                  <option value="en">译为英文</option>
+                  <option value="zh" disabled={sourceLang === 'zh'}>译为中文</option>
+                  <option value="en" disabled={sourceLang === 'en'}>译为英文</option>
                 </select>
               ) : null}
               {turn.output ? (

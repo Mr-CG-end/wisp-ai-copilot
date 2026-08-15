@@ -88,6 +88,36 @@ describe('TurnView', () => {
     expect(c.textContent).toContain('已停止');
   });
 
+  it('翻译轮把「译为原文语言」那一项置灰', async () => {
+    const c = await render(
+      <TurnView
+        turn={makeTurn({ type: 'translate', label: '翻译', output: 'Hello', isCurrent: true })}
+        {...baseProps}
+        targetLang="en"
+        sourceLang="zh"
+        onTargetLangChange={noop}
+      />,
+    );
+    const options = [...c.querySelectorAll('option')];
+    expect(options.find((o) => o.value === 'zh')?.disabled).toBe(true);
+    expect(options.find((o) => o.value === 'en')?.disabled).toBe(false);
+    expect(c.querySelector('select')?.title).toContain('原文是中文');
+  });
+
+  it('原文非中英时两个方向都可选', async () => {
+    const c = await render(
+      <TurnView
+        turn={makeTurn({ type: 'translate', label: '翻译', output: '译文', isCurrent: true })}
+        {...baseProps}
+        targetLang="zh"
+        onTargetLangChange={noop}
+      />,
+    );
+    const options = [...c.querySelectorAll('option')];
+    expect(options).toHaveLength(2);
+    expect(options.every((o) => !o.disabled)).toBe(true);
+  });
+
   it('达到长度上限时给出提示', async () => {
     const c = await render(<TurnView turn={makeTurn({ truncated: true })} {...baseProps} />);
     expect(c.querySelector('.wisp-truncated-note')).not.toBeNull();

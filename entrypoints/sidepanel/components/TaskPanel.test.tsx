@@ -49,7 +49,7 @@ import { TaskPanel } from './TaskPanel';
 const ctx = { tabId: 7, url: 'https://github.com/example', epoch: 1 };
 const mounted: ReturnType<typeof createRoot>[] = [];
 
-function pageChannel() {
+function pageChannel(overrides: Record<string, unknown> = {}) {
   return {
     activeTab: { tabId: 7, epoch: 1 },
     adoptCtx: vi.fn(),
@@ -59,18 +59,24 @@ function pageChannel() {
     pendingAction: null,
     readActivePage: vi.fn(async () => null),
     readPage: vi.fn(async () => null),
+    ...overrides,
   };
 }
 
-async function renderPanel() {
+async function renderPanel(channelOverrides: Record<string, unknown> = {}) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   await act(async () => {
     const root = createRoot(container);
     mounted.push(root);
-    root.render(<TaskPanel pageChannel={pageChannel() as never} />);
+    root.render(<TaskPanel pageChannel={pageChannel(channelOverrides) as never} />);
   });
   return container;
+}
+
+function buttonsByText(container: HTMLElement, text: string): HTMLButtonElement[] {
+  return [...container.querySelectorAll('button')]
+    .filter((candidate) => candidate.textContent?.trim() === text);
 }
 
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
@@ -174,5 +180,105 @@ describe('TaskPanel 摘要就绪度分流', () => {
     expect(regenerate.disabled).toBe(true);
     regenerate.click();
     expect(mocks.runGeneration).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 同一个动作在面板里有多个入口是设计使然（就近可操作），但同一屏上不能出现两个。
+ * 每条都同时断言「让位的那个消失了」和「留下的那个确实可用」——
+ * 只验前一半的话，把最后一个入口也藏掉的回归照样能过。
+ */
+describe('TaskPanel 异常态入口收口', () => {
+  beforeEach(() => {
+    mocks.runGeneration.mockClear();
+    mocks.readiness.value = { decision: 'allow', signals: [] };
+    usePanelStore.getState().reset();
+    usePanelStore.setState({
+      modelStatus: 'ready',
+      boundCtx: ctx,
+      page: {
+        ctx,
+        title: 'GitHub profile',
+        url: ctx.url,
+        text: '这是一段足够长的页面快照内容。'.repeat(30),
+        charCount: 450,
+        truncated: false,
+        method: 'readability',
+        readAt: Date.now(),
+      },
+    });
+  });
+
+  afterEach(async () => {
+    await act(async () => { mounted.splice(0).forEach((root) => root.unmount()); });
+    document.body.textContent = '';
+  });
+
+  it('页面错误横幅在场时，空态不再出现第二个「读取当前页」', async () => {
+    usePanelStore.setState({ page: null });
+    const container = await renderPanel({
+      lastError: { code: 'PAGE_INJECTION_BLOCKED', message: '浏览器不允许扩展读取此页面' },
+    });
+
+    const reads = buttonsByText(container, '读取当前页');
+    expect(reads).toHaveLength(1);
+    expect(reads[0].closest('.wisp-page-error-banner')).not.toBeNull();
+  });
+
+  it('跨标签横幅在场时，无快照说明行不再出现同名按钮', async () => {
+    usePanelStore.setState({
+      page: null,
+      currentTask: {
+        id: 'sel-1',
+        type: 'explain',
+        ctx,
+        status: 'success',
+        retryable: true,
+        source: 'example.com · 选区',
+        selectionText: '一段选中的中文',
+      },
+      streamBuffer: '解释结果',
+    });
+    const container = await renderPanel({ activeTab: { tabId: 9, epoch: 1 } });
+
+    expect(container.querySelector('.wisp-selection-only')).not.toBeNull();
+    expect(buttonsByText(container, '读取当前页')).toHaveLength(0);
+    expect(buttonsByText(container, '改读当前页')).toHaveLength(1);
+  });
+
+  it('摘要轮失败时重来的入口只留轮次里的「重新生成」', async () => {
+    usePanelStore.setState({
+      currentTask: {
+        id: 'summary-1',
+        type: 'summary',
+        ctx,
+        status: 'error',
+        retryable: true,
+        source: 'GitHub profile',
+      },
+      streamBuffer: '半截摘要',
+    });
+    const container = await renderPanel();
+
+    expect(buttonsByText(container, '生成摘要')).toHaveLength(0);
+    expect(buttonByText(container, '重新生成').disabled).toBe(false);
+  });
+
+  it('摘要轮失败但无法重跑时，动作条保留「生成摘要」，不至于一个入口都没有', async () => {
+    usePanelStore.setState({
+      currentTask: {
+        id: 'summary-1',
+        type: 'summary',
+        ctx: { ...ctx, url: 'https://example.com/old' },
+        status: 'error',
+        retryable: true,
+        source: '旧页面',
+      },
+      streamBuffer: '半截摘要',
+    });
+    const container = await renderPanel();
+
+    expect(buttonByText(container, '重新生成').disabled).toBe(true);
+    expect(buttonsByText(container, '生成摘要')).toHaveLength(1);
   });
 });

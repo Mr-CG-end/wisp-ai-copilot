@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { defaultTargetLang } from '../../../core/extract/selection';
+import { defaultTargetLang, detectLang } from '../../../core/extract/selection';
 import { assessSummaryReadiness } from '../../../core/extract/summaryReadiness';
 import { selectSummaryContext } from '../../../core/extract/summaryContext';
 import { truncateForContext } from '../../../core/extract/truncate';
@@ -41,6 +41,19 @@ function getPageHost(url: string): string {
  */
 function selectionLabel(url: string, text: string): string {
   return `${getPageHost(url)} · ${text.replace(/\s+/g, ' ').trim().slice(0, 20)}`;
+}
+
+/**
+ * 划词选区的原文语言，只用于把「译为原文语言」那一项置灰。
+ *
+ * 不存进轮次：它是 detectLang 对同一段文本的确定性结果，与 Content Script 当初
+ * 随动作送来的那个 lang 必然相同（两边喂的都是 normalizeSelection 后的同一串），
+ * 重算比多存一个字段便宜。other 返回 undefined —— 中英两项都不是原文语言，都可选。
+ */
+function selectionSourceLang(text: string | undefined): 'zh' | 'en' | undefined {
+  if (!text) return undefined;
+  const lang = detectLang(text);
+  return lang === 'zh' || lang === 'en' ? lang : undefined;
 }
 
 async function ensureSession(
@@ -161,6 +174,29 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
     : currentTask.selectionText
       ? isCtxCurrent(currentTask.ctx, boundCtx)
       : page !== null && currentTask.ctx.url === page.ctx.url;
+
+  /**
+   * 「读取当前页」在面板里有四个入口：跨标签横幅、页面错误横幅、无快照说明行、空态主操作。
+   * 横幅在场时它自带的按钮就是这一刻唯一的入口，另外两处必须让位 ——
+   * 否则同屏会出现两个字面完全一样的按钮，用户无从判断该点哪个。
+   */
+  const bannerOwnsReadAction = isCrossTab || Boolean(pageError);
+
+  /**
+   * 摘要轮失败或空返回时，「再做一次摘要」在动作条与该轮工具行里各有一个按钮。
+   * 交给轮次里的「重新生成」独占：它就在结果旁边，语义也更准（重来的是这一轮）。
+   *
+   * 条件与下面传给 TurnView 的 canRegenerate 逐项对齐 —— 只有那个按钮确实可用时才让位，
+   * 否则会把最后一个入口也一起藏掉。
+   */
+  const turnOwnsSummaryRetry = Boolean(
+    currentTask
+    && currentTask.type === 'summary'
+    && (currentTask.status === 'error' || currentTask.status === 'empty')
+    && canRerunCurrent
+    && summaryReadiness?.decision !== 'reject',
+  );
+  const showSummaryButton = summaryReadiness?.decision !== 'reject' && !turnOwnsSummaryRetry;
 
   // Turn 投影（core/panel/thread.ts）不带划词字段，按 id 回查 store 里的原始轮次。
   const taskById = new Map<string, CurrentTask>();
@@ -462,9 +498,9 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
             </div>
           </div>
 
-          {summaryReadiness?.decision !== 'reject' || copyNotice ? (
+          {showSummaryButton || copyNotice ? (
             <div className="wisp-action-bar" aria-label="页面操作">
-              {summaryReadiness?.decision !== 'reject' ? (
+              {showSummaryButton ? (
                 <button
                   className={`wisp-btn ${turns.length === 0 ? 'wisp-btn-primary' : 'wisp-btn-secondary'}`}
                   disabled={isGenerating}
@@ -504,9 +540,11 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
         <div className="wisp-selection-only">
           <span>本轮来自划词选区，未读取整页。</span>
           {copyNotice ? <span className="wisp-notice-pop" aria-hidden="true">{copyNotice}</span> : null}
-          <button className="wisp-btn wisp-btn-secondary" onClick={() => void handleReadActivePage()}>
-            读取当前页
-          </button>
+          {bannerOwnsReadAction ? null : (
+            <button className="wisp-btn wisp-btn-secondary" onClick={() => void handleReadActivePage()}>
+              读取当前页
+            </button>
+          )}
         </div>
       ) : null}
 
@@ -529,6 +567,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
                 }
                 selectionText={task?.selectionText}
                 targetLang={task?.targetLang === 'en' ? 'en' : 'zh'}
+                sourceLang={selectionSourceLang(task?.selectionText)}
                 onTargetLangChange={
                   turn.isCurrent && turn.type === 'translate' && task?.selectionText
                     ? (lang) => void handleChangeTargetLang(lang)
@@ -559,9 +598,11 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({ pageChannel }) => {
               <strong>读取一份页面快照</strong>
               <span>只在你点击后提取正文，不会持续监视网页。</span>
             </div>
-            <button className="wisp-btn wisp-btn-primary" onClick={() => void handleReadActivePage()}>
-              读取当前页
-            </button>
+            {bannerOwnsReadAction ? null : (
+              <button className="wisp-btn wisp-btn-primary" onClick={() => void handleReadActivePage()}>
+                读取当前页
+              </button>
+            )}
           </div>
           <SelectionDiscovery />
         </div>
